@@ -169,8 +169,12 @@ test.describe("all-AI demo", () => {
     const display = await board.evaluate((el) => getComputedStyle(el).display);
     expect(display).toBe("grid");
 
+    const backgroundCells = await board.locator(".board-cell.concealed").all();
+    expect(backgroundCells.length).toBe(100);
+
     const ariaCells = await board.getByRole("gridcell").all();
-    expect(ariaCells.length).toBe(100);
+    const objectCards = await board.locator(".object-card").all();
+    expect(ariaCells.length).toBe(objectCards.length);
 
     const bodyHtml = await page.locator("main").innerHTML();
     expect(bodyHtml).not.toMatch(/S0\d/);
@@ -183,5 +187,44 @@ test.describe("all-AI demo", () => {
     expect(feedText).toContain("拍卖师");
     const feedHtml = await feed.innerHTML();
     expect(feedHtml).not.toMatch(/S0\d/);
+  });
+
+  test("revealed objects are single spanning object-cards without leaks", async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByTestId("play-vs-ai").click();
+    await expect(page.getByTestId("lock-setup")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("analyst-analyst.surveyor").click();
+    await page.getByTestId("kit-kit.survey").click();
+    await page.getByTestId("lock-setup").click();
+
+    await expect(page.locator(".object-card").first()).toBeVisible({ timeout: 20_000 });
+
+    const cards = page.locator(".object-card");
+    const count = await cards.count();
+    expect(count).toBeGreaterThanOrEqual(1);
+
+    for (let i = 0; i < count; i++) {
+      const card = cards.nth(i);
+      const ariaCount = await card.count();
+      expect(ariaCount).toBe(1);
+      const w = await card.getAttribute("data-width");
+      const h = await card.getAttribute("data-height");
+      if (w && h) {
+        const box = await card.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.width).toBeGreaterThan(box!.height * (Number(w) / Number(h)) * 0.5);
+      }
+    }
+
+    const first = cards.first();
+    await first.click();
+    await expect(page.getByTestId("object-detail")).toBeVisible();
+
+    await page.setViewportSize({ width: 360, height: 720 });
+    await expect(page.getByTestId("lot-board")).toBeVisible();
+    const display = await page.getByTestId("lot-board").evaluate((el) => getComputedStyle(el).display);
+    expect(display).toBe("grid");
   });
 });

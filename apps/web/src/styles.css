@@ -329,6 +329,7 @@ button.link {
   flex-direction: column;
   gap: 8px;
   align-items: flex-start;
+  width: 100%;
 }
 
 .lot-board {
@@ -342,15 +343,11 @@ button.link {
   border: 1px solid #2a3549;
   border-radius: 8px;
   padding: 4px;
+  position: relative;
 }
 
 .board-cell {
-  background: #223148;
   border-radius: 2px;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   min-width: 0;
   min-height: 0;
 }
@@ -360,31 +357,66 @@ button.link {
     repeating-linear-gradient(45deg, #223148, #223148 3px, #26374f 3px, #26374f 6px);
 }
 
-.board-cell.revealed {
+.object-card {
+  border-radius: 6px;
+  border: 2px solid #6a80a3;
   background: #3b4d6b;
-  border: 1px solid #6a80a3;
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 2px;
+  margin: 1px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  font: inherit;
+  color: inherit;
+  z-index: 1;
 }
 
-.board-cell.revealed.tier-documented { border-color: #8fa3bf; }
-.board-cell.revealed.tier-scarce { border-color: #5dbb8a; }
-.board-cell.revealed.tier-exceptional { border-color: #d9a441; }
-.board-cell.revealed.tier-singular { border-color: #d95d5d; }
-
-.board-cell.flash {
-  outline: 2px solid var(--accent-2, #7cc7ff);
-  outline-offset: -2px;
+.object-card.anchor-only {
+  background: transparent;
+  border-style: dotted;
 }
 
-.board-cell.focused {
-  outline: 2px solid #ffffff;
-  outline-offset: -2px;
+.object-card.tier-documented { border-color: #8fa3bf; background: #3a4556; }
+.object-card.tier-scarce { border-color: #5dbb8a; background: #2f4a3d; }
+.object-card.tier-exceptional { border-color: #d9a441; background: #4d3f24; }
+.object-card.tier-singular { border-color: #d95d5d; background: #4d2f2f; }
+
+.object-card.flash {
+  outline: 3px solid var(--accent-2, #7cc7ff);
+  outline-offset: -3px;
+}
+
+.object-card.focused {
+  outline: 3px solid #ffffff;
+  outline-offset: -3px;
 }
 
 .tier-mark {
-  font-size: clamp(8px, 1.6vw, 13px);
+  font-size: clamp(10px, 2vw, 16px);
   line-height: 1;
   color: #ffffff;
+  text-shadow: 0 0 2px #000;
+  pointer-events: none;
+}
+
+.object-name {
+  font-size: clamp(8px, 1.6vw, 12px);
+  line-height: 1.1;
+  color: #ffffff;
+  text-shadow: 0 0 2px #000;
+  text-align: center;
+  pointer-events: none;
+}
+
+.object-value {
+  font-size: clamp(9px, 1.8vw, 13px);
+  color: #ffe08a;
   text-shadow: 0 0 2px #000;
   pointer-events: none;
 }
@@ -395,6 +427,7 @@ button.link {
   border-radius: 8px;
   padding: 8px 12px;
   min-width: 220px;
+  width: min(100%, 480px);
 }
 
 .object-detail header {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { LotBoard, RevealedObject, Strings } from "../types";
 import { t } from "../i18n";
 
@@ -16,6 +16,15 @@ const TIER_MARK: Record<string, string> = {
   singular: "★",
 };
 
+interface PlacedObject {
+  object: RevealedObject;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  anchorOnly: boolean;
+}
+
 export function LotBoardView({
   strings,
   board,
@@ -29,6 +38,7 @@ export function LotBoardView({
 }) {
   const [recentlyRevealed, setRecentlyRevealed] = useState<Set<string>>(new Set());
   const [focused, setFocused] = useState<string | null>(focusRevealId ?? null);
+  const cardRefs = useRef(new Map<string, HTMLButtonElement>());
 
   const objectsById = useMemo(() => {
     const map = new Map<string, RevealedObject>();
@@ -36,44 +46,52 @@ export function LotBoardView({
     return map;
   }, [board.revealedObjects]);
 
-  const prevIds = useMemo(() => new Set(board.revealedObjects.map((o) => o.revealId)), [board.revealedObjects]);
+  const placed = useMemo<PlacedObject[]>(() => {
+    const out: PlacedObject[] = [];
+    for (const obj of board.revealedObjects) {
+      if (obj.cells && obj.cells.length > 0) {
+        const xs = obj.cells.map((c) => c.x);
+        const ys = obj.cells.map((c) => c.y);
+        const minX = Math.min(...xs);
+        const minY = Math.min(...ys);
+        out.push({
+          object: obj,
+          x: minX,
+          y: minY,
+          width: Math.max(...xs) - minX + 1,
+          height: Math.max(...ys) - minY + 1,
+          anchorOnly: false,
+        });
+      } else if (obj.anchor) {
+        out.push({ object: obj, x: obj.anchor.x, y: obj.anchor.y, width: 1, height: 1, anchorOnly: true });
+      }
+    }
+    return out;
+  }, [board.revealedObjects]);
 
+  const currentIds = useMemo(() => new Set(board.revealedObjects.map((o) => o.revealId)), [board.revealedObjects]);
   const [seen, setSeen] = useState<Set<string>>(new Set());
   useEffect(() => {
     const fresh = new Set<string>();
-    for (const id of prevIds) {
+    for (const id of currentIds) {
       if (!seen.has(id)) fresh.add(id);
     }
-    setSeen(new Set(prevIds));
+    setSeen(new Set(currentIds));
     if (fresh.size > 0) {
       setRecentlyRevealed(fresh);
       const timer = setTimeout(() => setRecentlyRevealed(new Set()), 1800);
       return () => clearTimeout(timer);
     }
     return undefined;
-  }, [prevIds]);
+  }, [currentIds]);
 
   useEffect(() => {
     if (focusRevealId !== undefined) {
       setFocused(focusRevealId);
+      cardRefs.current.get(focusRevealId)?.focus();
       onFocusHandled?.();
     }
   }, [focusRevealId, onFocusHandled]);
-
-  const cellInfo = useMemo(() => {
-    const map = new Map<number, { objectId: string; isAnchor: boolean }>();
-    for (const obj of board.revealedObjects) {
-      if (obj.cells) {
-        for (const c of obj.cells) {
-          map.set(c.y * board.width + c.x, { objectId: obj.revealId, isAnchor: false });
-        }
-      }
-      if (obj.anchor) {
-        map.set(obj.anchor.y * board.width + obj.anchor.x, { objectId: obj.revealId, isAnchor: true });
-      }
-    }
-    return map;
-  }, [board.revealedObjects, board.width]);
 
   const focusedObject = focused ? objectsById.get(focused) : undefined;
 
@@ -86,39 +104,57 @@ export function LotBoardView({
         data-testid="lot-board"
         style={{ "--board-w": board.width, "--board-h": board.height } as React.CSSProperties}
       >
-        {Array.from({ length: board.width * board.height }, (_, i) => {
-          const x = i % board.width;
-          const y = Math.floor(i / board.width);
-          const info = cellInfo.get(i);
-          const obj = info ? objectsById.get(info.objectId) : undefined;
-          const classes = ["board-cell", "concealed"];
-          if (obj) {
-            classes.push("revealed");
-            if (obj.cells) classes.push("shape-known");
-            if (obj.tier) classes.push(TIER_CLASS[obj.tier] ?? "");
-            if (obj.identity) classes.push("identity-known");
-            if (recentlyRevealed.has(obj.revealId)) classes.push("flash");
-            if (focused === obj.revealId) classes.push("focused");
-          }
+        {Array.from({ length: board.width * board.height }, (_, i) => (
+          <div
+            key={i}
+            className="board-cell concealed"
+            aria-hidden="true"
+            data-testid={`bg-${i % board.width}-${Math.floor(i / board.width)}`}
+          />
+        ))}
+        {placed.map(({ object, x, y, width, height, anchorOnly }) => {
+          const classes = ["object-card"];
+          if (anchorOnly) classes.push("anchor-only");
+          if (object.tier) classes.push(TIER_CLASS[object.tier] ?? "");
+          if (object.identity) classes.push("identity-known");
+          if (recentlyRevealed.has(object.revealId)) classes.push("flash");
+          if (focused === object.revealId) classes.push("focused");
           return (
-            <div
-              key={`${x},${y}`}
+            <button
+              key={object.revealId}
+              ref={(el) => {
+                if (el) cardRefs.current.set(object.revealId, el);
+                else cardRefs.current.delete(object.revealId);
+              }}
+              type="button"
               role="gridcell"
-              aria-label={
-                obj
-                  ? t(strings, "board.cell.revealed", { detail: describeObject(strings, obj) })
-                  : t(strings, "board.cell.concealed")
-              }
               className={classes.join(" ")}
-              data-testid={`cell-${x}-${y}`}
-              onClick={obj ? () => setFocused(obj.revealId) : undefined}
+              style={
+                {
+                  gridColumn: `${x + 1} / span ${width}`,
+                  gridRow: `${y + 1} / span ${height}`,
+                  "--obj-w": width,
+                  "--obj-h": height,
+                } as React.CSSProperties
+              }
+              aria-label={t(strings, "board.cell.revealed", { detail: describeObject(strings, object) })}
+              data-testid={`object-${object.revealId}`}
+              data-width={anchorOnly ? undefined : width}
+              data-height={anchorOnly ? undefined : height}
+              onClick={() => setFocused(object.revealId)}
             >
-              {obj && info?.isAnchor && obj.tier ? (
+              {object.tier ? (
                 <span className="tier-mark" aria-hidden="true">
-                  {TIER_MARK[obj.tier] ?? "?"}
+                  {TIER_MARK[object.tier] ?? "?"}
                 </span>
               ) : null}
-            </div>
+              {object.identity ? (
+                <span className="object-name">{t(strings, `item.${object.identity}.name`)}</span>
+              ) : null}
+              {object.exactValue !== undefined && !object.identity ? (
+                <span className="object-value">{object.exactValue}</span>
+              ) : null}
+            </button>
           );
         })}
       </div>
@@ -135,37 +171,33 @@ export function LotBoardView({
             </button>
           </header>
           <dl>
-            {focusedObject.tier ? (
+            {focusedObject.cells ? (
               <>
-                <dt>{t(strings, "intel.field.tier")}</dt>
-                <dd>{t(strings, `tier.${focusedObject.tier}`)}</dd>
-              </>
-            ) : null}
-            {focusedObject.category ? (
-              <>
-                <dt>{t(strings, "intel.field.category")}</dt>
-                <dd>{t(strings, `category.${focusedObject.category}`)}</dd>
-              </>
-            ) : null}
-            {focusedObject.exactValue !== undefined ? (
-              <>
-                <dt>{t(strings, "intel.field.value")}</dt>
-                <dd>{focusedObject.exactValue}</dd>
-              </>
-            ) : focusedObject.candidateSummary ? (
-              <>
-                <dt>{t(strings, "table.catalogRange")}</dt>
+                <dt>{t(strings, "board.dimensions")}</dt>
                 <dd>
-                  {t(strings, "table.candidates", {
-                    count: focusedObject.candidateSummary.candidateIds.length,
-                  })}{" "}
-                  {t(strings, "table.valueRange", {
-                    min: focusedObject.candidateSummary.minValue,
-                    max: focusedObject.candidateSummary.maxValue,
-                  })}
+                  {rectOf(focusedObject.cells).width} × {rectOf(focusedObject.cells).height}
                 </dd>
               </>
             ) : null}
+            <dt>{t(strings, "intel.field.tier")}</dt>
+            <dd>{focusedObject.tier ? t(strings, `tier.${focusedObject.tier}`) : t(strings, "board.unknown")}</dd>
+            <dt>{t(strings, "intel.field.category")}</dt>
+            <dd>
+              {focusedObject.category
+                ? t(strings, `category.${focusedObject.category}`)
+                : t(strings, "board.unknown")}
+            </dd>
+            <dt>{t(strings, "intel.field.value")}</dt>
+            <dd>
+              {focusedObject.exactValue !== undefined
+                ? focusedObject.exactValue
+                : focusedObject.candidateSummary
+                  ? t(strings, "table.valueRange", {
+                      min: focusedObject.candidateSummary.minValue,
+                      max: focusedObject.candidateSummary.maxValue,
+                    })
+                  : t(strings, "board.unknown")}
+            </dd>
           </dl>
         </aside>
       ) : null}
@@ -193,6 +225,12 @@ export function LotBoardView({
       ) : null}
     </div>
   );
+}
+
+function rectOf(cells: Array<{ x: number; y: number }>): { width: number; height: number } {
+  const xs = cells.map((c) => c.x);
+  const ys = cells.map((c) => c.y);
+  return { width: Math.max(...xs) - Math.min(...xs) + 1, height: Math.max(...ys) - Math.min(...ys) + 1 };
 }
 
 function describeObject(strings: Strings, obj: RevealedObject): string {
