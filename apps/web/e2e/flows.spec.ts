@@ -79,4 +79,32 @@ test.describe("all-AI demo", () => {
 
     await expect(page.getByTestId("restart")).toBeVisible({ timeout: 120_000 });
   });
+
+  test("board does not leak item count and stays a grid on mobile", async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 360, height: 720 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "种子（可选，用于复现）" }).click();
+    await page.getByTestId("seed-input").fill("board-seed-mobile");
+    await page.getByTestId("watch-demo").click();
+    await expect(page.getByTestId("demo-controls")).toBeVisible({ timeout: 15_000 });
+
+    for (let i = 0; i < 10; i++) {
+      await page.getByTestId("demo-step").click();
+      await page.waitForTimeout(120);
+    }
+
+    const board = page.getByTestId("lot-board");
+    await expect(board).toBeVisible();
+    const display = await board.evaluate((el) => getComputedStyle(el).display);
+    expect(display).toBe("grid");
+
+    const ariaCells = await board.getByRole("gridcell").all();
+    expect(ariaCells.length).toBe(100);
+
+    const bodyHtml = await page.locator("main").innerHTML();
+    expect(bodyHtml).not.toMatch(/S0\d/);
+    expect(bodyHtml).not.toMatch(/itemCount/i);
+    expect(bodyHtml).not.toMatch(/slot-card/);
+  });
 });

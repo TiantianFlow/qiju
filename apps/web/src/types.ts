@@ -38,6 +38,45 @@ export interface RevealRecord {
   winningBid?: number;
 }
 
+export interface BoardCell {
+  x: number;
+  y: number;
+}
+
+export interface RevealedObject {
+  revealId: string;
+  anchor?: BoardCell;
+  cells?: BoardCell[];
+  tier?: string;
+  category?: string;
+  identity?: string;
+  exactValue?: number;
+  candidateSummary?: {
+    candidateIds: string[];
+    minValue: number;
+    maxValue: number;
+    unweightedMeanValueFloor: number;
+  };
+}
+
+export interface AggregateFact {
+  metric: string;
+  dimension: string;
+  key: string;
+  value: number;
+  round: number;
+  visibility: string;
+}
+
+export interface LotBoard {
+  schemaVersion: 1;
+  width: number;
+  height: number;
+  concealedCells: number;
+  revealedObjects: RevealedObject[];
+  aggregateFacts: AggregateFact[];
+}
+
 export interface MatchResultView {
   acquisition: {
     buyerSeatId?: string;
@@ -74,6 +113,7 @@ export interface MatchView {
   contentBundleId: string;
   startingBudget: number;
   slots: SlotView[];
+  board?: LotBoard;
   publicIntel: IntelRecordView[];
   loadouts?: Array<{ seatId: string; analystId: string; toolPackageId: string }>;
   window?: {

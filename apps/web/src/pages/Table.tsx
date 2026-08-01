@@ -3,23 +3,34 @@ import type { IntelRecordView, MatchView, Strings } from "../types";
 import type { MatchConnection } from "../connection";
 import { t } from "../i18n";
 import { SlotCard } from "../components/SlotCard";
+import { LotBoardView } from "../components/LotBoard";
 import { useCountdown } from "../hooks";
 
-function IntelList({ strings, records, title }: { strings: Strings; records: IntelRecordView[]; title: string }) {
+function IntelList({
+  strings,
+  records,
+  title,
+  hideSlotIds,
+}: {
+  strings: Strings;
+  records: IntelRecordView[];
+  title: string;
+  hideSlotIds?: boolean;
+}) {
   if (records.length === 0) return null;
   return (
     <section className="intel-list">
       <h4>{title}</h4>
       <ul>
         {records.map((record, i) => (
-          <li key={i}>{describeIntel(strings, record)}</li>
+          <li key={i}>{describeIntel(strings, record, hideSlotIds === true)}</li>
         ))}
       </ul>
     </section>
   );
 }
 
-function describeIntel(strings: Strings, record: IntelRecordView): string {
+function describeIntel(strings: Strings, record: IntelRecordView, hideSlotId: boolean): string {
   const fact = record.fact;
   if (fact.kind === "exhausted") return "…";
   if (fact.kind === "aggregate") {
@@ -40,7 +51,7 @@ function describeIntel(strings: Strings, record: IntelRecordView): string {
       value: fact.value,
     });
   }
-  const slot = fact.slotId;
+  const slot = hideSlotId ? t(strings, "board.unidentified") : fact.slotId;
   switch (fact.field) {
     case "tier":
       return `${slot}: ${t(strings, "intel.field.tier")} = ${t(strings, `tier.${fact.tier}`)}`;
@@ -120,19 +131,27 @@ export function TablePage({
       ) : null}
 
       <section className="slots-grid">
-        {view.slots.map((slot) => (
-          <SlotCard key={slot.slotId} strings={strings} slot={slot} />
-        ))}
+        {view.board ? (
+          <LotBoardView strings={strings} board={view.board} />
+        ) : (
+          view.slots.map((slot) => <SlotCard key={slot.slotId} strings={strings} slot={slot} />)
+        )}
       </section>
 
       <div className="table-columns">
         <div>
-          <IntelList strings={strings} records={view.publicIntel} title={t(strings, "intel.public.title")} />
+          <IntelList
+            strings={strings}
+            records={view.publicIntel}
+            title={t(strings, "intel.public.title")}
+            hideSlotIds={view.board !== undefined}
+          />
           {my ? (
             <IntelList
               strings={strings}
               records={my.privateIntel}
               title={t(strings, "intel.private.title")}
+              hideSlotIds={view.board !== undefined}
             />
           ) : null}
         </div>
