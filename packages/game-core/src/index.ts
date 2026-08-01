@@ -13,4 +13,5 @@ export {
   generateLotWithStreams,
   candidatesForSlot,
   executeSelector,
+  registerShapes,
 } from "./engine.js";

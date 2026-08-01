@@ -16,9 +16,14 @@ export function estimateWithAggregates(observation: SeatObservation): {
   mean: number;
 } {
   const base = estimateLotValue(observation);
-  const knownSum = observation.slots.reduce((a, s) => {
-    return a + (typeof s.knownFields.value === "number" ? s.knownFields.value : 0);
-  }, 0);
+  const knownSum = observation.board
+    ? observation.board.revealedObjects.reduce(
+        (a, o) => a + (typeof o.exactValue === "number" ? o.exactValue : 0),
+        0,
+      )
+    : observation.slots.reduce((a, s) => {
+        return a + (typeof s.knownFields.value === "number" ? s.knownFields.value : 0);
+      }, 0);
   void knownSum;
   return base;
 }

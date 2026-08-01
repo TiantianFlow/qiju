@@ -98,6 +98,20 @@ export interface LotPolicy {
   slotCount: number;
 }
 
+export interface LotPolicyV1 {
+  profiles: Array<{ id: ProfileId; drawWeight: number; tierWeights: [number, number, number, number] }>;
+  themeBoostFactor: number;
+  countMin: number;
+  countMax: number;
+  board: { width: number; height: number; maxAttempts: number };
+}
+
+export interface PublicIntelPoolEntry {
+  id: string;
+  weight: number;
+  selector: IntelEffectSelector;
+}
+
 export interface ContentSyntheticV0 {
   contentBundleId: "content.synthetic.v0";
   schemaVersion: 1;
@@ -109,10 +123,30 @@ export interface ContentSyntheticV0 {
   toolPackages: ToolPackageDef[];
 }
 
+export interface ContentSyntheticV1 {
+  contentBundleId: "content.synthetic.v1";
+  schemaVersion: 1;
+  catalog: ItemDef[];
+  shapes: ShapeDef[];
+  lotPolicy: LotPolicyV1;
+  publicIntelPool: PublicIntelPoolEntry[];
+  analysts: AnalystDef[];
+  toolPackages: ToolPackageDef[];
+}
+
+export type ContentSynthetic = ContentSyntheticV0 | ContentSyntheticV1;
+
+export interface LotPlacement {
+  slotId: SlotId;
+  anchor: Cell;
+  cells: Cell[];
+}
+
 export interface GeneratedLot {
-  generatorId: "synthetic.v0";
+  generatorId: "synthetic.v0" | "synthetic.v1";
   hiddenProfile: ProfileId;
   hiddenThemeCategories: [CategoryId, CategoryId];
   slots: Array<{ slotId: SlotId; itemId: ItemId }>;
   actualValue: number;
+  board?: { width: number; height: number; placements: LotPlacement[] };
 }

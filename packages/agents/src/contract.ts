@@ -114,11 +114,33 @@ export function estimateLotValue(observation: SeatObservation): {
   max: number;
   mean: number;
 } {
+  if (observation.board) {
+    return estimateBoardValue(observation);
+  }
   let min = 0;
   let max = 0;
   let mean = 0;
   for (const slot of observation.slots) {
     const c = slot.candidates;
+    min += c.minValue;
+    max += c.maxValue;
+    mean += c.unweightedMeanValueFloor;
+  }
+  return { min, max, mean };
+}
+
+function estimateBoardValue(observation: SeatObservation): {
+  min: number;
+  max: number;
+  mean: number;
+} {
+  const board = observation.board!;
+  let min = 0;
+  let max = 0;
+  let mean = 0;
+  for (const obj of board.revealedObjects) {
+    const c = obj.candidateSummary;
+    if (!c) continue;
     min += c.minValue;
     max += c.maxValue;
     mean += c.unweightedMeanValueFloor;

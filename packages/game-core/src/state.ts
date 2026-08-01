@@ -26,7 +26,7 @@ export interface RuleBundleManifest {
   ruleBundleId: "demo.v0";
   semanticVersion: "0.1.0";
   coreProtocol: 1;
-  contentBundleId: "content.synthetic.v0";
+  contentBundleId: "content.synthetic.v0" | "content.synthetic.v1";
   rngAlgorithm: "rng.xoshiro128ss.v1";
 }
 
@@ -53,9 +53,13 @@ export interface CompiledRuleRuntime {
   lotPolicy: {
     profiles: Array<{ id: string; drawWeight: number; tierWeights: readonly number[] }>;
     themeBoostFactor: number;
-    slotCount: number;
+    slotCount?: number;
+    countMin?: number;
+    countMax?: number;
+    board?: { width: number; height: number; maxAttempts: number };
   };
-  publicIntelSchedule: IntelEffectRuntime[];
+  publicIntelSchedule?: IntelEffectRuntime[];
+  publicIntelPool?: Array<{ id: string; weight: number; selector: SelectorRuntime }>;
   analysts: Map<AnalystId, AnalystRuntime>;
   toolPackages: Map<ToolPackageId, ToolPackageRuntime>;
   locale: LocaleBundle;
@@ -284,6 +288,40 @@ export interface SlotPublicView {
   candidates: CandidateRange;
 }
 
+export interface BoardCellView {
+  x: number;
+  y: number;
+}
+
+export interface RevealedObjectView {
+  revealId: string;
+  anchor?: BoardCellView;
+  cells?: BoardCellView[];
+  tier?: TierId;
+  category?: CategoryId;
+  identity?: ItemId;
+  exactValue?: number;
+  candidateSummary?: CandidateRange;
+}
+
+export interface AggregateFactView {
+  metric: "count" | "meanValueFloor";
+  dimension: "tier" | "category";
+  key: string;
+  value: number;
+  round: number;
+  visibility: "public" | SeatId;
+}
+
+export interface LotBoardView {
+  schemaVersion: 1;
+  width: number;
+  height: number;
+  concealedCells: number;
+  revealedObjects: RevealedObjectView[];
+  aggregateFacts: AggregateFactView[];
+}
+
 export interface PublicView {
   viewer: "public";
   matchId: string;
@@ -294,6 +332,7 @@ export interface PublicView {
   contentBundleId: string;
   startingBudget: number;
   slots: SlotPublicView[];
+  board?: LotBoardView;
   publicIntel: IntelRecord[];
   loadouts?: Array<{ seatId: SeatId; analystId: AnalystId; toolPackageId: ToolPackageId }>;
   window?: {

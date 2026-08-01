@@ -1,23 +1,31 @@
-import { canonicalHash, type CompiledRuleRuntime, type RuleBundleManifest } from "@qiju/game-core";
-import type { ItemDef, ItemId } from "@qiju/game-core";
-import { buildContentSyntheticV0, ZH_CN, EN } from "@qiju/content-demo";
+import {
+  canonicalHash,
+  registerShapes,
+  type CompiledRuleRuntime,
+  type RuleBundleManifest,
+} from "@qiju/game-core";
+import type { ContentSynthetic, ItemDef, ItemId } from "@qiju/game-core";
+import { buildContentSyntheticV0, buildContentSyntheticV1, ZH_CN, EN } from "@qiju/content-demo";
 
-export function compileDemoV0(): CompiledRuleRuntime {
-  const content = buildContentSyntheticV0();
+function compileContent(content: ContentSynthetic): CompiledRuleRuntime {
   const catalog = new Map<ItemId, ItemDef>();
   for (const item of content.catalog) catalog.set(item.id, item);
   const catalogSorted = [...content.catalog].sort((a, b) => a.id.localeCompare(b.id));
+
+  registerShapes(content.shapes.map((s) => ({ id: s.id, cells: s.cells.map((c) => ({ ...c })) })));
 
   const manifest: RuleBundleManifest = {
     ruleBundleId: "demo.v0",
     semanticVersion: "0.1.0",
     coreProtocol: 1,
-    contentBundleId: "content.synthetic.v0",
+    contentBundleId: content.contentBundleId,
     rngAlgorithm: "rng.xoshiro128ss.v1",
   };
 
-  const contentHash = canonicalHash(content);
+  const contentHash = canonicalHash(content as unknown as Record<string, unknown>);
   const manifestHash = canonicalHash({ ...manifest, contentHash });
+
+  const isV1 = content.contentBundleId === "content.synthetic.v1";
 
   return {
     manifest,
@@ -44,9 +52,32 @@ export function compileDemoV0(): CompiledRuleRuntime {
         tierWeights: p.tierWeights,
       })),
       themeBoostFactor: content.lotPolicy.themeBoostFactor,
-      slotCount: content.lotPolicy.slotCount,
+      ...(!isV1 && "slotCount" in content.lotPolicy ? { slotCount: content.lotPolicy.slotCount } : {}),
+      ...(isV1 && "countMin" in content.lotPolicy
+        ? {
+            countMin: content.lotPolicy.countMin,
+            countMax: content.lotPolicy.countMax,
+            board: { ...content.lotPolicy.board },
+          }
+        : {}),
     },
-    publicIntelSchedule: content.publicIntelSchedule.map((e) => ({ id: e.id, selector: e.selector })),
+    ...(!isV1 && "publicIntelSchedule" in content
+      ? {
+          publicIntelSchedule: content.publicIntelSchedule.map((e) => ({
+            id: e.id,
+            selector: e.selector,
+          })),
+        }
+      : {}),
+    ...(isV1 && "publicIntelPool" in content
+      ? {
+          publicIntelPool: content.publicIntelPool.map((e) => ({
+            id: e.id,
+            weight: e.weight,
+            selector: e.selector,
+          })),
+        }
+      : {}),
     analysts: new Map(
       content.analysts.map((a) => [
         a.id,
@@ -76,4 +107,12 @@ export function compileDemoV0(): CompiledRuleRuntime {
     ),
     locale: { "zh-CN": ZH_CN, en: EN },
   };
+}
+
+export function compileDemoV0(): CompiledRuleRuntime {
+  return compileContent(buildContentSyntheticV0());
+}
+
+export function compileDemoV1(): CompiledRuleRuntime {
+  return compileContent(buildContentSyntheticV1());
 }

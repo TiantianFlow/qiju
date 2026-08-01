@@ -2,9 +2,11 @@ import type {
   AnalystDef,
   CategoryId,
   ContentSyntheticV0,
+  ContentSyntheticV1,
   IntelEffectDef,
   ItemDef,
   ItemId,
+  PublicIntelPoolEntry,
   ShapeDef,
   ShapeId,
   TierId,
@@ -316,6 +318,75 @@ export function buildContentSyntheticV0(): ContentSyntheticV0 {
       slotCount: 10,
     },
     publicIntelSchedule: buildPublicIntelSchedule(),
+    analysts: buildAnalysts(),
+    toolPackages: buildToolPackages(),
+  };
+}
+
+export function buildPublicIntelPoolV1(): PublicIntelPoolEntry[] {
+  return [
+    {
+      id: "intel.public.pool.shapes-2",
+      weight: 15,
+      selector: { kind: "randomUnknown", field: "shape", count: 2 },
+    },
+    {
+      id: "intel.public.pool.shapes-1",
+      weight: 15,
+      selector: { kind: "randomUnknown", field: "shape", count: 1 },
+    },
+    {
+      id: "intel.public.pool.tiers-2",
+      weight: 15,
+      selector: { kind: "randomUnknown", field: "tier", count: 2 },
+    },
+    {
+      id: "intel.public.pool.tiers-1",
+      weight: 15,
+      selector: { kind: "randomUnknown", field: "tier", count: 1 },
+    },
+    {
+      id: "intel.public.pool.tier-count",
+      weight: 10,
+      selector: { kind: "randomMatchingTierCount", distinctTiers: 1 },
+    },
+    {
+      id: "intel.public.pool.category-count",
+      weight: 10,
+      selector: { kind: "randomExistingCategoryCount" },
+    },
+    {
+      id: "intel.public.pool.category-mean",
+      weight: 10,
+      selector: { kind: "randomExistingCategoryMeanValue" },
+    },
+    {
+      id: "intel.public.pool.identity-1",
+      weight: 10,
+      selector: { kind: "randomUnknown", field: "identity", count: 1 },
+    },
+  ];
+}
+
+export function buildContentSyntheticV1(): ContentSyntheticV1 {
+  return {
+    contentBundleId: "content.synthetic.v1",
+    schemaVersion: 1,
+    catalog: buildCatalog(),
+    shapes: buildShapes(),
+    lotPolicy: {
+      profiles: [
+        { id: "lean", drawWeight: 20, tierWeights: [16, 6, 2, 1] },
+        { id: "standard", drawWeight: 50, tierWeights: [10, 8, 4, 1] },
+        { id: "premium", drawWeight: 25, tierWeights: [4, 8, 8, 3] },
+        { id: "jackpot", drawWeight: 5, tierWeights: [4, 6, 8, 10] },
+      ],
+      themeBoostFactor: 3,
+      countMin: 8,
+      countMax: 12,
+      board: { width: 10, height: 10, maxAttempts: 64 },
+    },
+    publicIntelPool: buildPublicIntelPoolV1(),
     analysts: buildAnalysts(),
     toolPackages: buildToolPackages(),
   };

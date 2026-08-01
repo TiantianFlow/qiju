@@ -1,6 +1,7 @@
 import { canonicalHash } from "./prng-hash.js";
 import { Xoshiro128StarStar, deriveStreamSeed } from "./prng.js";
 import type {
+  AggregateFactView,
   CandidateRange,
   CompiledRuleRuntime,
   DecisionWindowState,
@@ -11,10 +12,12 @@ import type {
   IntelRecord,
   IntelVisibility,
   LegalActionSet,
+  LotBoardView,
   MatchResult,
   MatchState,
   PublicView,
   RequestedEffect,
+  RevealedObjectView,
   RoundRevealRecord,
   SeatId,
   SeatObservation,
@@ -33,6 +36,7 @@ import {
   type IntelFieldKind,
   type ItemDef,
   type ItemId,
+  type LotPlacement,
   type ProfileId,
   type SlotId,
   type TierId,
@@ -110,7 +114,16 @@ export function generateLotWithStreams(
   let actualValue = 0;
   const boost = runtime.lotPolicy.themeBoostFactor;
 
-  for (let s = 1; s <= runtime.lotPolicy.slotCount; s++) {
+  let itemCount = runtime.lotPolicy.slotCount ?? 0;
+  let countRng: Xoshiro128StarStar | null = null;
+  if (runtime.lotPolicy.countMin !== undefined && runtime.lotPolicy.countMax !== undefined) {
+    countRng = engineRng.stream("lot/count");
+    itemCount =
+      runtime.lotPolicy.countMin +
+      countRng.nextBelow(runtime.lotPolicy.countMax - runtime.lotPolicy.countMin + 1);
+  }
+
+  for (let s = 1; s <= itemCount; s++) {
     let totalWeight = 0;
     const weights = remaining.map((item) => {
       const w = tierWeightOf(item.tier) * (theme.includes(item.category) ? boost : 1);
@@ -135,14 +148,78 @@ export function generateLotWithStreams(
   persistStream(state, "lot/profile", profileRng);
   persistStream(state, "lot/theme", themeRng);
   persistStream(state, "lot/catalog-draw", drawRng);
+  if (countRng) persistStream(state, "lot/count", countRng);
+
+  let board: GeneratedLot["board"];
+  const boardPolicy = runtime.lotPolicy.board;
+  if (boardPolicy) {
+    const layoutRng = engineRng.stream("lot/layout");
+    board = {
+      width: boardPolicy.width,
+      height: boardPolicy.height,
+      placements: layoutBoard(runtime, slots, boardPolicy, layoutRng),
+    };
+    persistStream(state, "lot/layout", layoutRng);
+  }
 
   return {
-    generatorId: "synthetic.v0",
+    generatorId: boardPolicy ? "synthetic.v1" : "synthetic.v0",
     hiddenProfile: profile.id as ProfileId,
     hiddenThemeCategories: theme,
     slots,
     actualValue,
+    ...(board ? { board } : {}),
   };
+}
+
+function layoutBoard(
+  runtime: CompiledRuleRuntime,
+  slots: Array<{ slotId: SlotId; itemId: ItemId }>,
+  policy: { width: number; height: number; maxAttempts: number },
+  rng: Xoshiro128StarStar,
+): LotPlacement[] {
+  const occupied = new Set<number>();
+  const placements: LotPlacement[] = [];
+  const index = (x: number, y: number): number => y * policy.width + x;
+
+  for (const slot of slots) {
+    const item = runtime.catalog.get(slot.itemId);
+    if (!item) throw new Error(`unknown item ${slot.itemId}`);
+    const shape = SHAPE_DEF_LOOKUP.get(item.shapeId);
+    if (!shape) throw new Error(`unknown shape ${item.shapeId}`);
+
+    let placed: LotPlacement | null = null;
+    for (let attempt = 0; attempt < policy.maxAttempts && !placed; attempt++) {
+      const anchorX = rng.nextBelow(policy.width);
+      const anchorY = rng.nextBelow(policy.height);
+      const cells = shape.cells.map((c) => ({ x: anchorX + c.x, y: anchorY + c.y }));
+      const fits = cells.every(
+        (c) =>
+          c.x >= 0 &&
+          c.y >= 0 &&
+          c.x < policy.width &&
+          c.y < policy.height &&
+          !occupied.has(index(c.x, c.y)),
+      );
+      if (!fits) continue;
+      placed = { slotId: slot.slotId, anchor: { x: anchorX, y: anchorY }, cells };
+    }
+    if (!placed) {
+      throw new Error(`layout failed for ${slot.slotId} after ${policy.maxAttempts} attempts`);
+    }
+    for (const c of placed.cells) occupied.add(index(c.x, c.y));
+    placements.push(placed);
+  }
+  return placements;
+}
+
+const SHAPE_DEF_LOOKUP: Map<string, { id: string; cells: Array<{ x: number; y: number }> }> =
+  new Map();
+
+export function registerShapes(shapes: Array<{ id: string; cells: Array<{ x: number; y: number }> }>): void {
+  for (const shape of shapes) {
+    SHAPE_DEF_LOOKUP.set(shape.id, shape);
+  }
 }
 
 export function createMatch(input: {
@@ -512,13 +589,36 @@ function openRoundWindow(
   state.round = round;
   const engineRng = createEngineRng(state);
 
-  const publicEffect = runtime.publicIntelSchedule[round - 1];
-  if (publicEffect) {
-    const path = `intel/public/round/${round}`;
-    const rng = engineRng.stream(path);
-    const facts = executeSelector(runtime, state, publicEffect.selector, "public", rng);
-    persistStream(state, path, rng);
-    pushIntel(state, events, facts, { kind: "public" }, publicEffect.id, round, `${publicEffect.id}:r${round}`);
+  if (runtime.publicIntelPool && runtime.publicIntelPool.length > 0) {
+    const effectPath = `intel/public/round/${round}/effect`;
+    const effectRng = engineRng.stream(effectPath);
+    let total = 0;
+    for (const entry of runtime.publicIntelPool) total += entry.weight;
+    let pick = effectRng.nextBelow(total);
+    let chosen = runtime.publicIntelPool[0]!;
+    for (const entry of runtime.publicIntelPool) {
+      if (pick < entry.weight) {
+        chosen = entry;
+        break;
+      }
+      pick -= entry.weight;
+    }
+    persistStream(state, effectPath, effectRng);
+
+    const targetPath = `intel/public/round/${round}/target`;
+    const targetRng = engineRng.stream(targetPath);
+    const facts = executeSelector(runtime, state, chosen.selector, "public", targetRng);
+    persistStream(state, targetPath, targetRng);
+    pushIntel(state, events, facts, { kind: "public" }, chosen.id, round, `${chosen.id}:r${round}`);
+  } else {
+    const publicEffect = runtime.publicIntelSchedule?.[round - 1];
+    if (publicEffect) {
+      const path = `intel/public/round/${round}`;
+      const rng = engineRng.stream(path);
+      const facts = executeSelector(runtime, state, publicEffect.selector, "public", rng);
+      persistStream(state, path, rng);
+      pushIntel(state, events, facts, { kind: "public" }, publicEffect.id, round, `${publicEffect.id}:r${round}`);
+    }
   }
 
   for (const seat of state.seats) {
@@ -1223,6 +1323,8 @@ function projectView(
   const window = state.window;
   const result = state.phase.kind === "completed" ? state.phase.result : undefined;
 
+  const board = projectBoard(runtime, state, viewer, knowledge);
+
   return {
     viewer,
     matchId: state.matchId,
@@ -1233,6 +1335,7 @@ function projectView(
     contentBundleId: state.ruleManifest.contentBundleId,
     startingBudget: runtime.config.startingBudget,
     slots,
+    ...(board ? { board } : {}),
     publicIntel,
     ...(state.loadoutsRevealed
       ? {
@@ -1262,4 +1365,68 @@ function projectView(
 
 export function hashState(state: MatchState): string {
   return canonicalHash(state as unknown as Record<string, unknown>);
+}
+function projectBoard(
+  runtime: CompiledRuleRuntime,
+  state: MatchState,
+  viewer: SeatId | "public",
+  knowledge: Map<SlotId, Partial<Record<IntelFieldKind, unknown>>>,
+): LotBoardView | undefined {
+  const board = state.lot?.board;
+  if (!board || !state.lot) return undefined;
+
+  const placementBySlot = new Map<SlotId, LotPlacement>();
+  for (const p of board.placements) placementBySlot.set(p.slotId, p);
+
+  const revealedObjects: RevealedObjectView[] = [];
+  for (const slot of state.lot.slots) {
+    const fields = knowledge.get(slot.slotId) ?? {};
+    const placement = placementBySlot.get(slot.slotId);
+    if (!placement) continue;
+
+    const shapeKnown = fields.shape !== undefined || fields.identity !== undefined;
+    const tierKnown = fields.tier !== undefined || fields.identity !== undefined;
+    const identityKnown = fields.identity !== undefined;
+    const valueKnown = fields.value !== undefined || fields.identity !== undefined;
+    const anyKnown = shapeKnown || tierKnown || identityKnown || valueKnown;
+    if (!anyKnown) continue;
+
+    const revealed: RevealedObjectView = {
+      revealId: `obj.${slot.slotId}`,
+      ...(tierKnown ? { anchor: placement.anchor } : {}),
+      ...(shapeKnown ? { cells: placement.cells } : {}),
+      ...(fields.tier !== undefined ? { tier: fields.tier as TierId } : {}),
+      ...(fields.category !== undefined ? { category: fields.category as CategoryId } : {}),
+      ...(identityKnown ? { identity: fields.identity as ItemId } : {}),
+      ...(fields.value !== undefined ? { exactValue: fields.value as number } : {}),
+      candidateSummary: candidatesForSlot(runtime, state, viewer, slot.slotId),
+    };
+    revealedObjects.push(revealed);
+  }
+
+  const aggregateFacts: AggregateFactView[] = [];
+  for (const record of state.intel) {
+    if (record.fact.kind !== "aggregate") continue;
+    const vis = record.visibility;
+    const visible =
+      vis.kind === "public" || (viewer !== "public" && vis.kind === "seat" && vis.seatId === viewer);
+    if (!visible) continue;
+    aggregateFacts.push({
+      metric: record.fact.metric,
+      dimension: record.fact.dimension,
+      key: record.fact.key,
+      value: record.fact.value,
+      round: record.round,
+      visibility: vis.kind === "public" ? "public" : vis.seatId,
+    });
+  }
+
+  return {
+    schemaVersion: 1,
+    width: board.width,
+    height: board.height,
+    concealedCells: board.width * board.height,
+    revealedObjects,
+    aggregateFacts,
+  };
 }

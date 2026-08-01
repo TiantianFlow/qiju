@@ -20,7 +20,7 @@ import {
   type ServerEnvelope,
 } from "@qiju/contracts";
 import type { GameCommand, SeatId } from "@qiju/game-core";
-import { compileDemoV0 } from "@qiju/rules-demo";
+import { compileDemoV1 } from "@qiju/rules-demo";
 import { agentById, BUILTIN_AGENTS, type Agent } from "@qiju/agents";
 import {
   RoomManager,
@@ -96,7 +96,7 @@ export async function buildApp(envOverrides?: Partial<AppEnv> & Record<string, s
   }
   const cookieSecret = env.COOKIE_SECRET ?? "dev-only-insecure-secret-change-me";
 
-  const runtime = compileDemoV0();
+  const runtime = compileDemoV1();
   const clock = new SystemClock();
   const connections = new Map<string, Set<{ socket: WebSocket; ctx: ConnectionContext }>>();
 
