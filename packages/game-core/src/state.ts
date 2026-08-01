@@ -138,6 +138,7 @@ export interface IntelRecord {
   sourceId: string;
   round: number;
   effectInstanceId: string;
+  revision?: number;
 }
 
 export interface WindowBidState {
@@ -165,6 +166,20 @@ export interface RoundRevealRecord {
   outcome: "continue" | "sold" | "tiebreak" | "no_sale";
   buyerSeatId?: SeatId;
   winningBid?: number;
+  revision?: number;
+}
+
+export type PublicEventSourceKind = "auctioneer" | "analyst" | "tool" | "bidding" | "system";
+
+export interface PublicEventView {
+  id: string;
+  revision: number;
+  round: number;
+  sourceKind: PublicEventSourceKind;
+  localizationKey: string;
+  params: Record<string, string | number>;
+  effectInstanceId?: string;
+  revealIds: string[];
 }
 
 export interface AcquisitionResult {
@@ -221,6 +236,7 @@ export interface MatchState {
   round: number;
   loadoutsRevealed: boolean;
   intel: IntelRecord[];
+  revealTokenBySlot?: Record<string, string>;
   window?: DecisionWindowState | undefined;
   reveals: RoundRevealRecord[];
   streams: Record<string, RngStreamState>;
@@ -334,6 +350,7 @@ export interface PublicView {
   slots: SlotPublicView[];
   board?: LotBoardView;
   publicIntel: IntelRecord[];
+  publicEvents?: PublicEventView[];
   loadouts?: Array<{ seatId: SeatId; analystId: AnalystId; toolPackageId: ToolPackageId }>;
   window?: {
     actionWindowId: string;

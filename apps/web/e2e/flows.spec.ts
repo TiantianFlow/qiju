@@ -106,5 +106,12 @@ test.describe("all-AI demo", () => {
     expect(bodyHtml).not.toMatch(/S0\d/);
     expect(bodyHtml).not.toMatch(/itemCount/i);
     expect(bodyHtml).not.toMatch(/slot-card/);
+
+    const feed = page.getByTestId("event-feed");
+    await expect(feed).toBeVisible();
+    const feedText = (await feed.textContent()) ?? "";
+    expect(feedText).toContain("拍卖师");
+    const feedHtml = await feed.innerHTML();
+    expect(feedHtml).not.toMatch(/S0\d/);
   });
 });

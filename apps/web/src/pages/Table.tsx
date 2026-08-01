@@ -1,10 +1,55 @@
 import { useState } from "react";
-import type { IntelRecordView, MatchView, Strings } from "../types";
+import type { IntelRecordView, MatchView, PublicEvent, Strings } from "../types";
 import type { MatchConnection } from "../connection";
 import { t } from "../i18n";
 import { SlotCard } from "../components/SlotCard";
 import { LotBoardView } from "../components/LotBoard";
 import { useCountdown } from "../hooks";
+
+function formatEventDescription(strings: Strings, event: PublicEvent): string {
+  const params: Record<string, string | number> = { ...event.params };
+  if (typeof params.tier === "string") params.tier = t(strings, `tier.${params.tier}`);
+  if (typeof params.category === "string") params.category = t(strings, `category.${params.category}`);
+  if (event.localizationKey.startsWith("event.intel.aggregate.")) {
+    if (typeof params.key === "string") {
+      const prefix = event.localizationKey === "event.intel.aggregate.countTier" ? "tier" : "category";
+      params.key = t(strings, `${prefix}.${params.key}`);
+    }
+  }
+  return t(strings, event.localizationKey, params);
+}
+
+function EventFeed({
+  strings,
+  events,
+  onFocusObject,
+}: {
+  strings: Strings;
+  events: PublicEvent[];
+  onFocusObject: (revealId: string) => void;
+}) {
+  if (events.length === 0) return null;
+  return (
+    <section className="event-feed" data-testid="event-feed" aria-label={t(strings, "event.feed.title")}>
+      <h4>{t(strings, "event.feed.title")}</h4>
+      <ol>
+        {events.map((event) => (
+          <li key={event.id} data-testid={`event-${event.id}`}>
+            <span className="event-round">R{event.round}</span>
+            <span className="event-source">{t(strings, `event.source.${event.sourceKind}`)}</span>
+            {event.revealIds.length > 0 ? (
+              <button className="event-link" onClick={() => onFocusObject(event.revealIds[0]!)}>
+                {formatEventDescription(strings, event)}
+              </button>
+            ) : (
+              <span className="event-text">{formatEventDescription(strings, event)}</span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
 
 function IntelList({
   strings,
@@ -82,6 +127,7 @@ export function TablePage({
   seed: string | null;
 }) {
   const [bidInput, setBidInput] = useState("");
+  const [focusRevealId, setFocusRevealId] = useState<string | undefined>(undefined);
   const remaining = useCountdown(connection.deadlineAtMs);
   const my = view.mySeat;
   const window = view.window;
@@ -132,7 +178,12 @@ export function TablePage({
 
       <section className="slots-grid">
         {view.board ? (
-          <LotBoardView strings={strings} board={view.board} />
+          <LotBoardView
+            strings={strings}
+            board={view.board}
+            focusRevealId={focusRevealId}
+            onFocusHandled={() => setFocusRevealId(undefined)}
+          />
         ) : (
           view.slots.map((slot) => <SlotCard key={slot.slotId} strings={strings} slot={slot} />)
         )}
@@ -140,6 +191,13 @@ export function TablePage({
 
       <div className="table-columns">
         <div>
+          {view.publicEvents && view.publicEvents.length > 0 ? (
+            <EventFeed
+              strings={strings}
+              events={view.publicEvents}
+              onFocusObject={(id) => setFocusRevealId(id)}
+            />
+          ) : null}
           <IntelList
             strings={strings}
             records={view.publicIntel}

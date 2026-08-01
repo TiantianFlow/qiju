@@ -160,3 +160,92 @@ describe("v0 regression", () => {
     expect(view.slots).toHaveLength(10);
   });
 });
+
+describe("public event feed", () => {
+  function playRounds(seed: string, maxCommands: number): MatchState {
+    let state = createAuction(seed);
+    for (let i = 0; i < maxCommands && state.window; i++) {
+      const window = state.window;
+      const seatId = window.participants.find((p) => !window.bids[p]?.locked);
+      if (!seatId) {
+        const r = transition(runtimeV1, state, {
+          kind: "deadline_reached",
+          actionWindowId: window.actionWindowId,
+        });
+        if (r.kind !== "accepted") break;
+        state = r.nextState;
+        continue;
+      }
+      const submit = transition(runtimeV1, state, {
+        kind: "submit_bid",
+        seatId,
+        amount: 0,
+        actionWindowId: window.actionWindowId,
+      });
+      if (submit.kind !== "accepted") break;
+      const lock = transition(runtimeV1, submit.nextState, {
+        kind: "lock_bid",
+        seatId,
+        actionWindowId: window.actionWindowId,
+      });
+      if (lock.kind !== "accepted") break;
+      state = lock.nextState;
+    }
+    return state;
+  }
+
+  it("each regular round adds exactly one auctioneer event; tiebreak adds none", () => {
+    const state = playRounds("feed-seed-1", 200);
+    const view = observePublic(runtimeV1, state);
+    const events = view.publicEvents!;
+    const auctioneerRounds = events
+      .filter((e) => e.sourceKind === "auctioneer")
+      .map((e) => e.round);
+    const uniqueRounds = new Set(auctioneerRounds);
+    expect(auctioneerRounds.length).toBe(uniqueRounds.size);
+    for (const r of uniqueRounds) {
+      expect(r).toBeGreaterThanOrEqual(1);
+      expect(r).toBeLessThanOrEqual(5);
+    }
+  });
+
+  it("feed is identical for same seed", () => {
+    const a = observePublic(runtimeV1, playRounds("feed-seed-2", 60)).publicEvents!;
+    const b = observePublic(runtimeV1, playRounds("feed-seed-2", 60)).publicEvents!;
+    expect(a).toEqual(b);
+    expect(a.length).toBeGreaterThan(0);
+  });
+
+  it("feed is sorted by revision and object events carry revealIds, aggregates do not", () => {
+    const state = playRounds("feed-seed-3", 100);
+    const events = observePublic(runtimeV1, state).publicEvents!;
+    for (let i = 1; i < events.length; i++) {
+      expect(events[i]!.revision).toBeGreaterThanOrEqual(events[i - 1]!.revision);
+    }
+    for (const e of events) {
+      if (e.localizationKey === "event.intel.aggregate.count" ||
+          e.localizationKey === "event.intel.aggregate.mean" ||
+          e.localizationKey === "event.intel.aggregate.countTier") {
+        expect(e.revealIds).toHaveLength(0);
+      }
+      if (e.localizationKey.startsWith("event.intel.field.")) {
+        expect(e.revealIds.length).toBe(1);
+        expect(e.revealIds[0]).not.toMatch(/S0\d/);
+        expect(e.revealIds[0]!.startsWith("obj.")).toBe(true);
+      }
+    }
+  });
+
+  it("private tool results never enter the public feed", () => {
+    const state = playRounds("feed-seed-4", 100);
+    const view = observePublic(runtimeV1, state);
+    const privateSources = state.intel
+      .filter((r) => r.visibility.kind === "seat")
+      .map((r) => r.effectInstanceId);
+    for (const e of view.publicEvents!) {
+      expect(privateSources).not.toContain(e.effectInstanceId);
+    }
+    const seatView = observeSeat(runtimeV1, state, "seat1");
+    expect(seatView.publicEvents!.map((e) => e.id)).toEqual(view.publicEvents!.map((e) => e.id));
+  });
+});

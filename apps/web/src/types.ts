@@ -77,6 +77,17 @@ export interface LotBoard {
   aggregateFacts: AggregateFact[];
 }
 
+export interface PublicEvent {
+  id: string;
+  revision: number;
+  round: number;
+  sourceKind: "auctioneer" | "analyst" | "tool" | "bidding" | "system";
+  localizationKey: string;
+  params: Record<string, string | number>;
+  effectInstanceId?: string;
+  revealIds: string[];
+}
+
 export interface MatchResultView {
   acquisition: {
     buyerSeatId?: string;
@@ -115,6 +126,7 @@ export interface MatchView {
   slots: SlotView[];
   board?: LotBoard;
   publicIntel: IntelRecordView[];
+  publicEvents?: PublicEvent[];
   loadouts?: Array<{ seatId: string; analystId: string; toolPackageId: string }>;
   window?: {
     actionWindowId: string;

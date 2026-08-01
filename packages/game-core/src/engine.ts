@@ -15,6 +15,7 @@ import type {
   LotBoardView,
   MatchResult,
   MatchState,
+  PublicEventView,
   PublicView,
   RequestedEffect,
   RevealedObjectView,
@@ -160,6 +161,16 @@ export function generateLotWithStreams(
       placements: layoutBoard(runtime, slots, boardPolicy, layoutRng),
     };
     persistStream(state, "lot/layout", layoutRng);
+
+    const tokenRng = engineRng.stream("lot/reveal-tokens");
+    const tokenBySlot: Record<string, string> = {};
+    for (const slot of slots) {
+      const a = tokenRng.nextBelow(0xffffffff);
+      const b = tokenRng.nextBelow(0xffff);
+      tokenBySlot[slot.slotId] = `obj.${a.toString(16).padStart(8, "0")}${b.toString(16).padStart(4, "0")}`;
+    }
+    state.revealTokenBySlot = tokenBySlot;
+    persistStream(state, "lot/reveal-tokens", tokenRng);
   }
 
   return {
@@ -518,7 +529,14 @@ function pushIntel(
   effectInstanceId: string,
 ): void {
   for (const fact of facts) {
-    const record: IntelRecord = { fact, visibility, sourceId, round, effectInstanceId };
+    const record: IntelRecord = {
+      fact,
+      visibility,
+      sourceId,
+      round,
+      effectInstanceId,
+      revision: state.revision + 1,
+    };
     state.intel.push(record);
     events.push({
       seq: 0,
@@ -714,6 +732,7 @@ function closeWindowAndReveal(
     bids: bidsRecord,
     toolUsed: { ...window.toolUsed },
     outcome: "continue",
+    revision: state.revision + 1,
   };
 
   const sorted = [...window.participants]
@@ -1324,6 +1343,7 @@ function projectView(
   const result = state.phase.kind === "completed" ? state.phase.result : undefined;
 
   const board = projectBoard(runtime, state, viewer, knowledge);
+  const publicEvents = projectPublicEvents(state);
 
   return {
     viewer,
@@ -1337,6 +1357,7 @@ function projectView(
     slots,
     ...(board ? { board } : {}),
     publicIntel,
+    publicEvents,
     ...(state.loadoutsRevealed
       ? {
           loadouts: state.seats.map((s) => ({
@@ -1392,7 +1413,7 @@ function projectBoard(
     if (!anyKnown) continue;
 
     const revealed: RevealedObjectView = {
-      revealId: `obj.${slot.slotId}`,
+      revealId: state.revealTokenBySlot?.[slot.slotId] ?? `obj.${slot.slotId}`,
       ...(tierKnown ? { anchor: placement.anchor } : {}),
       ...(shapeKnown ? { cells: placement.cells } : {}),
       ...(fields.tier !== undefined ? { tier: fields.tier as TierId } : {}),
@@ -1429,4 +1450,113 @@ function projectBoard(
     revealedObjects,
     aggregateFacts,
   };
+}
+
+function projectPublicEvents(state: MatchState): PublicEventView[] {
+  const events: PublicEventView[] = [];
+
+  const toolUseByInstance = new Map<string, { seatId: SeatId; toolId: string }>();
+  for (const reveal of state.reveals) {
+    for (const [seatId, toolId] of Object.entries(reveal.toolUsed)) {
+      if (!toolId) continue;
+      events.push({
+        id: `tool:${reveal.round}:${seatId}`,
+        revision: reveal.revision ?? 0,
+        round: reveal.round,
+        sourceKind: "tool",
+        localizationKey: "event.tool.used",
+        params: { seat: seatId, toolId },
+        revealIds: [],
+      });
+    }
+  }
+
+  for (const record of state.intel) {
+    if (record.visibility.kind !== "public") continue;
+    const fact = record.fact;
+    const base = {
+      revision: record.revision ?? 0,
+      round: record.round,
+      effectInstanceId: record.effectInstanceId,
+    };
+    if (fact.kind === "exhausted") {
+      events.push({
+        id: `intel:${record.effectInstanceId}:exhausted`,
+        ...base,
+        sourceKind: "auctioneer",
+        localizationKey: "event.intel.exhausted",
+        params: {},
+        revealIds: [],
+      });
+      continue;
+    }
+    if (fact.kind === "aggregate") {
+      const key =
+        fact.metric === "count"
+          ? fact.dimension === "tier"
+            ? "event.intel.aggregate.countTier"
+            : "event.intel.aggregate.count"
+          : "event.intel.aggregate.mean";
+      events.push({
+        id: `intel:${record.effectInstanceId}:agg:${fact.dimension}:${fact.key}`,
+        ...base,
+        sourceKind: record.sourceId.startsWith("intel.public") ? "auctioneer" : "analyst",
+        localizationKey: key,
+        params: { key: fact.key, value: fact.value },
+        revealIds: [],
+      });
+      continue;
+    }
+    const revealId = state.revealTokenBySlot?.[fact.slotId] ?? `obj.${fact.slotId}`;
+    const params: Record<string, string | number> = { field: fact.field };
+    if (fact.tier) params.tier = fact.tier;
+    if (fact.category) params.category = fact.category;
+    if (fact.itemId) params.itemId = fact.itemId;
+    if (fact.value !== undefined) params.value = fact.value;
+    events.push({
+      id: `intel:${record.effectInstanceId}:${revealId}:${fact.field}`,
+      ...base,
+      sourceKind: record.sourceId.startsWith("intel.public")
+        ? "auctioneer"
+        : record.sourceId.startsWith("analyst.")
+          ? "analyst"
+          : "tool",
+      localizationKey: `event.intel.field.${fact.field}`,
+      params,
+      revealIds: [revealId],
+    });
+  }
+
+  for (const reveal of state.reveals) {
+    const bids = Object.entries(reveal.bids)
+      .map(([seat, amount]) => `${seat}:${amount}`)
+      .join(",");
+    const outcomeKey =
+      reveal.outcome === "sold"
+        ? "event.bidding.sold"
+        : reveal.outcome === "tiebreak"
+          ? "event.bidding.tiebreak"
+          : reveal.outcome === "no_sale"
+            ? "event.bidding.noSale"
+            : "event.bidding.continue";
+    const params: Record<string, string | number> = {
+      round: reveal.round,
+      bids,
+      lockedSeats: "",
+    };
+    if (reveal.buyerSeatId) params.seat = reveal.buyerSeatId;
+    if (reveal.winningBid !== undefined) params.amount = reveal.winningBid;
+    events.push({
+      id: `reveal:${reveal.kind}:${reveal.round}`,
+      revision: reveal.revision ?? 0,
+      round: reveal.round,
+      sourceKind: "bidding",
+      localizationKey: outcomeKey,
+      params,
+      revealIds: [],
+    });
+  }
+
+  events.sort((a, b) => a.revision - b.revision || a.id.localeCompare(b.id));
+  return events;
 }
