@@ -1,0 +1,228 @@
+import {
+  agentRng,
+  estimateLotValue,
+  lockIfPossible,
+  type Agent,
+  type AgentDecision,
+} from "./contract.js";
+
+export const randomLegalAgent: Agent = {
+  agentId: "random-legal",
+  agentVersion: "1",
+  async decide(input): Promise<AgentDecision> {
+    const { observation, legalActions, context } = input;
+    const rng = agentRng(context);
+
+    const selectAction = legalActions.actions.find((a) => a.kind === "select_loadout");
+    if (selectAction && selectAction.kind === "select_loadout") {
+      const needsAnalyst = observation.mySeat.analystId === undefined;
+      const needsKit = observation.mySeat.toolPackageId === undefined;
+      if (needsAnalyst || needsKit) {
+        const analystId = needsAnalyst
+          ? [...selectAction.analystIds].sort()[rng.nextBelow(selectAction.analystIds.length)]!
+          : observation.mySeat.analystId!;
+        const toolPackageId = needsKit
+          ? [...selectAction.toolPackageIds].sort()[rng.nextBelow(selectAction.toolPackageIds.length)]!
+          : observation.mySeat.toolPackageId!;
+        return {
+          action: { kind: "select_loadout", seatId: context.seatId, analystId, toolPackageId },
+        };
+      }
+    }
+    for (const action of legalActions.actions) {
+      if (action.kind === "lock_setup") {
+        return { action: { kind: "lock_setup", seatId: context.seatId } };
+      }
+    }
+
+    const windowId = context.actionWindowId;
+    if (windowId && observation.mySeat.currentBid === undefined) {
+      const submitAction = legalActions.actions.find((a) => a.kind === "submit_bid");
+      if (submitAction && submitAction.kind === "submit_bid") {
+        const amount = rng.nextBelow(submitAction.max + 1);
+        return {
+          action: { kind: "submit_bid", seatId: context.seatId, amount, actionWindowId: windowId },
+        };
+      }
+    }
+    if (windowId && observation.mySeat.currentBid !== undefined) {
+      const toolAction = legalActions.actions.find((a) => a.kind === "use_tool");
+      if (toolAction && toolAction.kind === "use_tool" && rng.nextBelow(2) === 0) {
+        const toolId = [...toolAction.toolIds].sort()[rng.nextBelow(toolAction.toolIds.length)]!;
+        return {
+          action: { kind: "use_tool", seatId: context.seatId, toolId, actionWindowId: windowId },
+        };
+      }
+      const lock = lockIfPossible(input);
+      if (lock) return { action: lock };
+    }
+    return {
+      action: {
+        kind: "submit_bid",
+        seatId: context.seatId,
+        amount: 0,
+        actionWindowId: windowId ?? "none",
+      },
+    };
+  },
+};
+
+interface PersonaParams {
+  valueQuantile: number;
+  winnerCurseDiscountPercent: number;
+  bidFractionPercent: number;
+  toolEagerness: number;
+  completionBias: number;
+  riskBand: "low" | "medium" | "high";
+}
+
+export function createHeuristicAgent(
+  agentId: string,
+  agentVersion: string,
+  params: PersonaParams,
+): Agent {
+  return {
+    agentId,
+    agentVersion,
+    async decide(input): Promise<AgentDecision> {
+      const { observation, legalActions, context } = input;
+      const rng = agentRng(context);
+
+      for (const action of legalActions.actions) {
+        if (action.kind === "select_loadout") {
+          const needsAnalyst = observation.mySeat.analystId === undefined;
+          const needsKit = observation.mySeat.toolPackageId === undefined;
+          if (!needsAnalyst && !needsKit) continue;
+          const analystId = needsAnalyst
+            ? [...action.analystIds].sort()[rng.nextBelow(action.analystIds.length)]!
+            : observation.mySeat.analystId!;
+          const toolPackageId = needsKit
+            ? [...action.toolPackageIds].sort()[rng.nextBelow(action.toolPackageIds.length)]!
+            : observation.mySeat.toolPackageId!;
+          return {
+            action: {
+              kind: "select_loadout",
+              seatId: context.seatId,
+              analystId,
+              toolPackageId,
+            },
+          };
+        }
+      }
+      for (const action of legalActions.actions) {
+        if (action.kind === "lock_setup") {
+          return { action: { kind: "lock_setup", seatId: context.seatId } };
+        }
+      }
+
+      const estimate = estimateLotValue(observation);
+      const windowId = context.actionWindowId;
+
+      if (!windowId) {
+        return {
+          action: {
+            kind: "submit_bid",
+            seatId: context.seatId,
+            amount: 0,
+            actionWindowId: "none",
+          },
+        };
+      }
+
+      const toolAction = legalActions.actions.find((a) => a.kind === "use_tool");
+      if (toolAction && toolAction.kind === "use_tool" && rng.nextBelow(100) < params.toolEagerness) {
+        const toolId = [...toolAction.toolIds].sort()[rng.nextBelow(toolAction.toolIds.length)]!;
+        return {
+          action: { kind: "use_tool", seatId: context.seatId, toolId, actionWindowId: windowId },
+          diagnostics: {
+            estimatedValueRange: estimate,
+            riskBand: params.riskBand,
+            rationaleCodes: ["use-tool-for-info"],
+          },
+        };
+      }
+
+      const valueAtQuantile =
+        estimate.min + Math.floor(((estimate.max - estimate.min) * params.valueQuantile) / 100);
+      const blended = Math.floor((valueAtQuantile + estimate.mean) / 2);
+      const discounted = Math.floor(
+        (blended * (100 - params.winnerCurseDiscountPercent)) / 100,
+      );
+      const target = Math.floor((discounted * params.bidFractionPercent) / 100);
+
+      const round = observation.round;
+      const lateRound = round >= 4 || observation.phase === "tiebreak";
+      const completionBoost = lateRound ? params.completionBias : 0;
+      const noise = rng.nextBelow(Math.max(1, Math.floor(target / 8) + 1));
+      let amount = target + completionBoost + noise;
+      amount = Math.max(0, Math.min(observation.startingBudget, amount));
+
+      const alreadyBid = observation.mySeat.currentBid;
+      if (alreadyBid !== undefined) {
+        const lock = lockIfPossible(input);
+        if (lock) {
+          return {
+            action: lock,
+            diagnostics: {
+              estimatedValueRange: estimate,
+              riskBand: params.riskBand,
+              rationaleCodes: ["lock-after-bid"],
+            },
+          };
+        }
+      }
+
+      return {
+        action: {
+          kind: "submit_bid",
+          seatId: context.seatId,
+          amount,
+          actionWindowId: windowId,
+        },
+        diagnostics: {
+          estimatedValueRange: estimate,
+          riskBand: params.riskBand,
+          rationaleCodes: ["value-quantile-bid"],
+        },
+      };
+    },
+  };
+}
+
+export const cautiousAppraiserAgent = createHeuristicAgent("cautious-appraiser", "1", {
+  valueQuantile: 25,
+  winnerCurseDiscountPercent: 30,
+  bidFractionPercent: 70,
+  toolEagerness: 85,
+  completionBias: 0,
+  riskBand: "low",
+});
+
+export const balancedCalculatorAgent = createHeuristicAgent("balanced-calculator", "1", {
+  valueQuantile: 50,
+  winnerCurseDiscountPercent: 15,
+  bidFractionPercent: 80,
+  toolEagerness: 60,
+  completionBias: 400,
+  riskBand: "medium",
+});
+
+export const aggressiveChallengerAgent = createHeuristicAgent("aggressive-challenger", "1", {
+  valueQuantile: 70,
+  winnerCurseDiscountPercent: 8,
+  bidFractionPercent: 90,
+  toolEagerness: 40,
+  completionBias: 1200,
+  riskBand: "high",
+});
+
+export const BUILTIN_AGENTS: readonly Agent[] = [
+  randomLegalAgent,
+  cautiousAppraiserAgent,
+  balancedCalculatorAgent,
+  aggressiveChallengerAgent,
+];
+
+export function agentById(id: string): Agent | undefined {
+  return BUILTIN_AGENTS.find((a) => a.agentId === id);
+}

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+playwright-report/
+test-results/
+data/
+.DS_Store

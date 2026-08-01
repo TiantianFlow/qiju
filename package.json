@@ -1,0 +1,31 @@
+{
+  "name": "qiju",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "test": "pnpm -r --if-present run test",
+    "test:integration": "pnpm -r --if-present run test:integration",
+    "arena:smoke": "pnpm --filter @qiju/arena run smoke",
+    "build": "pnpm -r run build",
+    "test:e2e": "pnpm --filter @qiju/web run test:e2e",
+    "guard:content": "node scripts/check-forbidden-content.mjs",
+    "dev:server": "pnpm --filter @qiju/server run dev",
+    "dev:web": "pnpm --filter @qiju/web run dev",
+    "start": "node apps/server/dist/main.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

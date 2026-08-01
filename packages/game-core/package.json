@@ -1,0 +1,25 @@
+{
+  "name": "@qiju/game-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@qiju/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "fast-check": "^3.23.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

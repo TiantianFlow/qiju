@@ -1,0 +1,29 @@
+{
+  "name": "@qiju/arena",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "qiju-arena": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "smoke": "node dist/cli.js run --matches 1000 --out data/arena-smoke --smoke"
+  },
+  "dependencies": {
+    "@qiju/agents": "workspace:*",
+    "@qiju/content-demo": "workspace:*",
+    "@qiju/contracts": "workspace:*",
+    "@qiju/game-core": "workspace:*",
+    "@qiju/replay": "workspace:*",
+    "@qiju/rules-demo": "workspace:*",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
