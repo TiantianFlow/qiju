@@ -1467,10 +1467,26 @@ function projectBoard(
   for (const p of board.placements) placementBySlot.set(p.slotId, p);
 
   const revealedObjects: RevealedObjectView[] = [];
+  const completed = state.phase.kind === "completed";
   for (const slot of state.lot.slots) {
     const fields = knowledge.get(slot.slotId) ?? {};
     const placement = placementBySlot.get(slot.slotId);
     if (!placement) continue;
+
+    if (completed) {
+      const item = runtime.catalog.get(slot.itemId)!;
+      revealedObjects.push({
+        revealId: state.revealTokenBySlot?.[slot.slotId] ?? `obj.${slot.slotId}`,
+        anchor: placement.anchor,
+        cells: placement.cells,
+        tier: item.tier,
+        category: item.category,
+        identity: item.id,
+        exactValue: item.value,
+        candidateSummary: candidatesForSlot(runtime, state, viewer, slot.slotId),
+      });
+      continue;
+    }
 
     const shapeKnown = fields.shape !== undefined || fields.identity !== undefined;
     const tierKnown = fields.tier !== undefined || fields.identity !== undefined;
@@ -1537,6 +1553,11 @@ function projectPublicEvents(state: MatchState): PublicEventView[] {
     }
   }
 
+  const publicFieldGroups = new Map<
+    string,
+    { revision: number; round: number; sourceId: string; fields: Set<string>; revealIds: string[]; params: Record<string, string | number> }
+  >();
+
   for (const record of state.intel) {
     if (record.visibility.kind !== "public") continue;
     const fact = record.fact;
@@ -1574,22 +1595,42 @@ function projectPublicEvents(state: MatchState): PublicEventView[] {
       continue;
     }
     const revealId = state.revealTokenBySlot?.[fact.slotId] ?? `obj.${fact.slotId}`;
-    const params: Record<string, string | number> = { field: fact.field };
-    if (fact.tier) params.tier = fact.tier;
-    if (fact.category) params.category = fact.category;
-    if (fact.itemId) params.itemId = fact.itemId;
-    if (fact.value !== undefined) params.value = fact.value;
+    const group = publicFieldGroups.get(record.effectInstanceId) ?? {
+      revision: record.revision ?? 0,
+      round: record.round,
+      sourceId: record.sourceId,
+      fields: new Set<string>(),
+      revealIds: [],
+      params: {},
+    };
+    group.fields.add(fact.field);
+    if (!group.revealIds.includes(revealId)) group.revealIds.push(revealId);
+    if (fact.tier) group.params.tier = fact.tier;
+    if (fact.category) group.params.category = fact.category;
+    if (fact.itemId) group.params.itemId = fact.itemId;
+    if (fact.value !== undefined) group.params.value = fact.value;
+    publicFieldGroups.set(record.effectInstanceId, group);
+  }
+
+  for (const [effectInstanceId, group] of publicFieldGroups) {
+    const fields = [...group.fields].sort();
+    const multiTarget = group.revealIds.length > 1;
+    const localizationKey = multiTarget
+      ? `event.intel.multi.${fields.join("-")}`
+      : `event.intel.field.${fields[0]}`;
     events.push({
-      id: `intel:${record.effectInstanceId}:${revealId}:${fact.field}`,
-      ...base,
-      sourceKind: record.sourceId.startsWith("intel.public")
+      id: `intel:${effectInstanceId}`,
+      revision: group.revision,
+      round: group.round,
+      sourceKind: group.sourceId.startsWith("intel.public")
         ? "auctioneer"
-        : record.sourceId.startsWith("analyst.")
+        : group.sourceId.startsWith("analyst.")
           ? "analyst"
           : "tool",
-      localizationKey: `event.intel.field.${fact.field}`,
-      params,
-      revealIds: [revealId],
+      localizationKey,
+      params: { ...group.params, count: group.revealIds.length },
+      revealIds: [...group.revealIds].sort(),
+      effectInstanceId,
     });
   }
 

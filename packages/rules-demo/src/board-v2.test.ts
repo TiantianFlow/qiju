@@ -131,3 +131,106 @@ describe("v2 secrecy", () => {
     }
   });
 });
+
+describe("completed projection", () => {
+  function playToEnd(seed: string): MatchState {
+    let state = createAuction(seed);
+    for (let i = 0; i < 200 && state.window; i++) {
+      const window = state.window;
+      const seatId = window.participants.find((p) => !window.bids[p]?.locked);
+      if (!seatId) {
+        const r = transition(runtimeV2, state, {
+          kind: "deadline_reached",
+          actionWindowId: window.actionWindowId,
+        });
+        if (r.kind !== "accepted") break;
+        state = r.nextState;
+        continue;
+      }
+      const submit = transition(runtimeV2, state, {
+        kind: "submit_bid",
+        seatId,
+        amount: 0,
+        actionWindowId: window.actionWindowId,
+      });
+      if (submit.kind !== "accepted") break;
+      const lock = transition(runtimeV2, submit.nextState, {
+        kind: "lock_bid",
+        seatId,
+        actionWindowId: window.actionWindowId,
+      });
+      if (lock.kind !== "accepted") break;
+      state = lock.nextState;
+    }
+    return state;
+  }
+
+  it("completed public view enumerates all objects and totals actual value", () => {
+    const state = playToEnd("v2-complete-1");
+    expect(state.phase.kind).toBe("completed");
+    const view = observePublic(runtimeV2, state);
+    expect(view.slots.length).toBe(state.lot!.slots.length);
+    const objects = view.board!.revealedObjects;
+    expect(objects.length).toBe(state.lot!.slots.length);
+    const sum = objects.reduce((a, o) => a + (o.exactValue ?? 0), 0);
+    expect(sum).toBe(state.lot!.actualValue);
+    for (const o of objects) {
+      expect(o.identity).toBeDefined();
+      expect(o.cells).toBeDefined();
+      expect(o.tier).toBeDefined();
+    }
+  });
+
+  it("mid-auction public view still does not enumerate hidden objects", () => {
+    const state = createAuction("v2-complete-2");
+    const view = observePublic(runtimeV2, state);
+    expect(view.slots.length).toBe(0);
+    expect(view.board!.revealedObjects.length).toBeLessThan(state.lot!.slots.length);
+  });
+});
+
+describe("multi-target public effect aggregation", () => {
+  it("a multi-target public effect produces exactly one event with multiple revealIds", () => {
+    let found = 0;
+    for (let i = 0; i < 80 && found < 3; i++) {
+      const state = createAuction(`multi-agg-${i}`);
+      const view = observePublic(runtimeV2, state);
+      for (const e of view.publicEvents!) {
+        if (e.sourceKind !== "auctioneer") continue;
+        if (!e.localizationKey.startsWith("event.intel.multi.")) continue;
+        found++;
+        expect(e.revealIds.length).toBeGreaterThanOrEqual(2);
+        const sameInstance = view.publicEvents!.filter(
+          (o) => o.effectInstanceId === e.effectInstanceId,
+        );
+        expect(sameInstance.length).toBe(1);
+      }
+    }
+    expect(found).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("category-only private overlay", () => {
+  it("seat-only category reveal updates that seat's board overlay only", () => {
+    const state = createAuction("v2-cat-overlay-1");
+    const seatView = observeSeat(runtimeV2, state, "seat1");
+    const pubView = observePublic(runtimeV2, state);
+    const seatObjects = seatView.board!.revealedObjects;
+    const pubObjects = pubView.board!.revealedObjects;
+    const seatOnly = seatObjects.filter(
+      (o) => !pubObjects.some((p) => p.revealId === o.revealId),
+    );
+    expect(seatOnly.length).toBeGreaterThan(0);
+    for (const o of seatOnly) {
+      expect(o.revealId).not.toMatch(/S0\d/);
+    }
+    const otherSeat = observeSeat(runtimeV2, state, "seat2");
+    const seat1Tokens = new Set(seatOnly.map((o) => o.revealId));
+    for (const o of otherSeat.board!.revealedObjects) {
+      if (seat1Tokens.has(o.revealId)) {
+        const seat1Obj = seatOnly.find((x) => x.revealId === o.revealId)!;
+        expect(Object.keys(o).length).toBeLessThanOrEqual(Object.keys(seat1Obj).length);
+      }
+    }
+  });
+});

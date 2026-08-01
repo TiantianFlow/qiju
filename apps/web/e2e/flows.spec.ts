@@ -228,3 +228,52 @@ test.describe("all-AI demo", () => {
     expect(display).toBe("grid");
   });
 });
+
+test.describe("result page", () => {
+  test("completed demo shows full lot board and inspects multiple object sizes", async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.goto("/");
+    await page.getByRole("button", { name: "种子（可选，用于复现）" }).click();
+    await page.getByTestId("seed-input").fill("result-board-seed");
+    await page.getByTestId("watch-demo").click();
+    await expect(page.getByTestId("demo-controls")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("demo-speed").selectOption("8");
+    await page.getByTestId("demo-resume").click();
+    await expect(page.getByTestId("restart")).toBeVisible({ timeout: 120_000 });
+
+    const resultBoard = page.getByTestId("result-board");
+    await expect(resultBoard).toBeVisible();
+    const cards = resultBoard.locator(".object-card");
+    const count = await cards.count();
+    expect(count).toBeGreaterThanOrEqual(8);
+
+    const sizes = new Set<string>();
+    for (let i = 0; i < count; i++) {
+      const w = await cards.nth(i).getAttribute("data-width");
+      const h = await cards.nth(i).getAttribute("data-height");
+      if (w && h) sizes.add(`${w}x${h}`);
+    }
+    expect(sizes.size).toBeGreaterThanOrEqual(2);
+
+    const inspected = new Set<string>();
+    for (let i = 0; i < count && inspected.size < 3; i++) {
+      const card = cards.nth(i);
+      const w = await card.getAttribute("data-width");
+      const h = await card.getAttribute("data-height");
+      const key = `${w}x${h}`;
+      if (inspected.has(key)) continue;
+      inspected.add(key);
+      await card.click();
+      const detail = page.getByTestId("object-detail");
+      await expect(detail).toBeVisible();
+      const text = (await detail.textContent()) ?? "";
+      expect(text).toContain("×");
+      expect(text).not.toContain("未知");
+      await detail.getByRole("button").click();
+    }
+    expect(inspected.size).toBeGreaterThanOrEqual(3);
+
+    const mainHtml = await page.locator("main").innerHTML();
+    expect(mainHtml).not.toMatch(/S0\d/);
+  });
+});

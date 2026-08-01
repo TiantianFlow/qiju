@@ -1,5 +1,6 @@
 import type { MatchView, Strings } from "../types";
 import { t } from "../i18n";
+import { LotBoardView } from "../components/LotBoard";
 
 export function ResultPage({
   strings,
@@ -47,6 +48,12 @@ export function ResultPage({
       ) : (
         <p data-testid="result-nosale">{t(strings, "result.noSale")}</p>
       )}
+      {view.board ? (
+        <section data-testid="result-board">
+          <h3>{t(strings, "result.lotBoard")}</h3>
+          <LotBoardView strings={strings} board={view.board} />
+        </section>
+      ) : null}
       <section>
         <h3>{t(strings, "result.economic")}</h3>
         <table>
