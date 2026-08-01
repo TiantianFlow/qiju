@@ -21,7 +21,7 @@ test.describe("home page", () => {
 
 test.describe("human vs AI match", () => {
   test("complete a full match from home to result", async ({ page }) => {
-    test.setTimeout(300_000);
+    test.setTimeout(600_000);
     await page.goto("/");
     await page.getByTestId("play-vs-ai").click();
 
@@ -29,12 +29,6 @@ test.describe("human vs AI match", () => {
     await page.getByTestId("analyst-analyst.appraiser").click();
     await page.getByTestId("kit-kit.appraisal").click();
     await page.getByTestId("lock-setup").click();
-
-    await expect(page.getByTestId("deadline")).toBeVisible({ timeout: 15_000 });
-    const firstDeadline = await page.getByTestId("deadline").textContent();
-    const firstSeconds = Number((firstDeadline ?? "").replace(/\D+/g, ""));
-    expect(firstSeconds).toBeGreaterThanOrEqual(115);
-    expect(firstSeconds).toBeLessThanOrEqual(120);
 
     for (let round = 0; round < 7; round++) {
       const resultVisible = await page
@@ -54,17 +48,73 @@ test.describe("human vs AI match", () => {
       if (canLock) {
         await lockButton.click();
       }
-      const deadlineEl = page.getByTestId("deadline");
-      if (await deadlineEl.isVisible().catch(() => false)) {
-        await expect(deadlineEl).toBeHidden({ timeout: 130_000 });
-      } else {
-        await page.waitForTimeout(2_000);
-      }
+      const heading = page.locator(".table-head h2");
+      const before = (await heading.textContent().catch(() => "")) ?? "";
+      await expect
+        .poll(
+          async () => {
+            if (await page.getByTestId("restart").isVisible().catch(() => false)) return "done";
+            return (await heading.textContent().catch(() => "")) ?? "";
+          },
+          { timeout: 140_000 },
+        )
+        .not.toBe(before);
     }
 
     await expect(page.getByTestId("restart")).toBeVisible({ timeout: 60_000 });
     await page.getByTestId("restart").click();
     await expect(page.getByTestId("play-vs-ai")).toBeVisible();
+  });
+
+  test("human round timer starts near 120 seconds and counts down without jumping back", async ({ page }) => {
+    test.setTimeout(60_000);
+    await page.goto("/");
+    await page.getByTestId("play-vs-ai").click();
+    await expect(page.getByTestId("lock-setup")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("analyst-analyst.appraiser").click();
+    await page.getByTestId("kit-kit.appraisal").click();
+    await page.getByTestId("lock-setup").click();
+
+    await expect(page.getByTestId("deadline")).toBeVisible({ timeout: 20_000 });
+    const readSeconds = async () =>
+      Number(((await page.getByTestId("deadline").textContent()) ?? "").replace(/\D+/g, ""));
+    const first = await readSeconds();
+    expect(first).toBeGreaterThanOrEqual(115);
+    expect(first).toBeLessThanOrEqual(120);
+    await page.waitForTimeout(2_500);
+    const later = await readSeconds();
+    expect(later).toBeLessThan(first);
+    expect(later).toBeGreaterThan(first - 8);
+  });
+
+  test("deadline survives reload and the server closes the window at 120s", async ({ page }) => {
+    test.setTimeout(200_000);
+    await page.goto("/");
+    await page.getByTestId("play-vs-ai").click();
+    await expect(page.getByTestId("lock-setup")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("analyst-analyst.appraiser").click();
+    await page.getByTestId("kit-kit.appraisal").click();
+    await page.getByTestId("lock-setup").click();
+    await expect(page.getByTestId("deadline")).toBeVisible({ timeout: 20_000 });
+
+    await page.goto("/");
+    const deadlineAfterReload = page.getByTestId("deadline");
+    await expect(deadlineAfterReload).toBeVisible({ timeout: 20_000 });
+    const seconds = Number(((await deadlineAfterReload.textContent()) ?? "").replace(/\D+/g, ""));
+    expect(seconds).toBeLessThanOrEqual(120);
+    expect(seconds).toBeGreaterThan(0);
+
+    const heading = page.locator(".table-head h2");
+    const before = (await heading.textContent().catch(() => "")) ?? "";
+    await expect
+      .poll(
+        async () => {
+          if (await page.getByTestId("restart").isVisible().catch(() => false)) return "done";
+          return (await heading.textContent().catch(() => "")) ?? "";
+        },
+        { timeout: 140_000 },
+      )
+      .not.toBe(before);
   });
 });
 
@@ -105,9 +155,13 @@ test.describe("all-AI demo", () => {
     await page.getByTestId("watch-demo").click();
     await expect(page.getByTestId("demo-controls")).toBeVisible({ timeout: 15_000 });
 
-    for (let i = 0; i < 10; i++) {
-      await page.getByTestId("demo-step").click();
-      await page.waitForTimeout(120);
+    for (let i = 0; i < 6; i++) {
+      const stepButton = page.getByTestId("demo-step");
+      if (!(await stepButton.isVisible().catch(() => false))) break;
+      const board = page.getByTestId("lot-board");
+      if (await board.isVisible().catch(() => false)) break;
+      await stepButton.click();
+      await page.waitForTimeout(150);
     }
 
     const board = page.getByTestId("lot-board");

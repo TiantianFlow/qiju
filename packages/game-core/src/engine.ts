@@ -16,6 +16,7 @@ import type {
   MatchResult,
   MatchState,
   PublicEventView,
+  PublicIntelRecordView,
   PublicView,
   RequestedEffect,
   RevealedObjectView,
@@ -174,7 +175,11 @@ export function generateLotWithStreams(
   }
 
   return {
-    generatorId: boardPolicy ? "synthetic.v1" : "synthetic.v0",
+    generatorId: boardPolicy
+      ? runtime.manifest.contentBundleId === "content.synthetic.v2"
+        ? "synthetic.v2"
+        : "synthetic.v1"
+      : "synthetic.v0",
     hiddenProfile: profile.id as ProfileId,
     hiddenThemeCategories: theme,
     slots,
@@ -189,39 +194,93 @@ function layoutBoard(
   policy: { width: number; height: number; maxAttempts: number },
   rng: Xoshiro128StarStar,
 ): LotPlacement[] {
-  const occupied = new Set<number>();
-  const placements: LotPlacement[] = [];
-  const index = (x: number, y: number): number => y * policy.width + x;
-
-  for (const slot of slots) {
+  const rects = slots.map((slot) => {
     const item = runtime.catalog.get(slot.itemId);
     if (!item) throw new Error(`unknown item ${slot.itemId}`);
-    const shape = SHAPE_DEF_LOOKUP.get(item.shapeId);
-    if (!shape) throw new Error(`unknown shape ${item.shapeId}`);
-
-    let placed: LotPlacement | null = null;
-    for (let attempt = 0; attempt < policy.maxAttempts && !placed; attempt++) {
-      const anchorX = rng.nextBelow(policy.width);
-      const anchorY = rng.nextBelow(policy.height);
-      const cells = shape.cells.map((c) => ({ x: anchorX + c.x, y: anchorY + c.y }));
-      const fits = cells.every(
-        (c) =>
-          c.x >= 0 &&
-          c.y >= 0 &&
-          c.x < policy.width &&
-          c.y < policy.height &&
-          !occupied.has(index(c.x, c.y)),
-      );
-      if (!fits) continue;
-      placed = { slotId: slot.slotId, anchor: { x: anchorX, y: anchorY }, cells };
-    }
-    if (!placed) {
-      throw new Error(`layout failed for ${slot.slotId} after ${policy.maxAttempts} attempts`);
-    }
-    for (const c of placed.cells) occupied.add(index(c.x, c.y));
-    placements.push(placed);
+    const fp = item.footprint ?? footprintFromShape(item.shapeId);
+    return { slotId: slot.slotId, width: fp.width, height: fp.height };
+  });
+  const order = [...rects].sort((a, b) => b.width * b.height - a.width * a.height || a.slotId.localeCompare(b.slotId));
+  const cellsTotal = rects.reduce((a, r) => a + r.width * r.height, 0);
+  if (cellsTotal > policy.width * policy.height) {
+    throw new Error(`layout infeasible: ${cellsTotal} cells > board ${policy.width * policy.height}`);
   }
-  return placements;
+
+  for (let attempt = 0; attempt < policy.maxAttempts; attempt++) {
+    const placements = tryBacktrackingLayout(order, policy, rng);
+    if (placements) {
+      const bySlot = new Map(placements.map((p) => [p.slotId, p]));
+      return slots.map((s) => bySlot.get(s.slotId)!);
+    }
+  }
+  throw new Error(`layout failed after ${policy.maxAttempts} backtracking attempts`);
+}
+
+function footprintFromShape(shapeId: string): { width: number; height: number } {
+  const shape = SHAPE_DEF_LOOKUP.get(shapeId);
+  if (!shape) throw new Error(`unknown shape ${shapeId}`);
+  const maxX = Math.max(...shape.cells.map((c) => c.x));
+  const maxY = Math.max(...shape.cells.map((c) => c.y));
+  return { width: maxX + 1, height: maxY + 1 };
+}
+
+function tryBacktrackingLayout(
+  order: Array<{ slotId: SlotId; width: number; height: number }>,
+  policy: { width: number; height: number },
+  rng: Xoshiro128StarStar,
+): LotPlacement[] | null {
+  const occupied = new Uint8Array(policy.width * policy.height);
+  const placements: LotPlacement[] = [];
+
+  const fits = (anchorX: number, anchorY: number, w: number, h: number): boolean => {
+    if (anchorX + w > policy.width || anchorY + h > policy.height) return false;
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        if (occupied[(anchorY + dy) * policy.width + (anchorX + dx)]) return false;
+      }
+    }
+    return true;
+  };
+  const fill = (anchorX: number, anchorY: number, w: number, h: number, v: number): void => {
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        occupied[(anchorY + dy) * policy.width + (anchorX + dx)] = v;
+      }
+    }
+  };
+
+  const place = (index: number): boolean => {
+    if (index === order.length) return true;
+    const rect = order[index]!;
+    const candidates: Array<{ x: number; y: number }> = [];
+    for (let y = 0; y <= policy.height - rect.height; y++) {
+      for (let x = 0; x <= policy.width - rect.width; x++) {
+        if (fits(x, y, rect.width, rect.height)) candidates.push({ x, y });
+      }
+    }
+    for (let i = candidates.length - 1; i > 0; i--) {
+      const j = rng.nextBelow(i + 1);
+      const tmp = candidates[i]!;
+      candidates[i] = candidates[j]!;
+      candidates[j] = tmp;
+    }
+    for (const c of candidates) {
+      fill(c.x, c.y, rect.width, rect.height, 1);
+      const cells: Array<{ x: number; y: number }> = [];
+      for (let dy = 0; dy < rect.height; dy++) {
+        for (let dx = 0; dx < rect.width; dx++) {
+          cells.push({ x: c.x + dx, y: c.y + dy });
+        }
+      }
+      placements.push({ slotId: rect.slotId, anchor: { x: c.x, y: c.y }, cells });
+      if (place(index + 1)) return true;
+      placements.pop();
+      fill(c.x, c.y, rect.width, rect.height, 0);
+    }
+    return false;
+  };
+
+  return place(0) ? placements : null;
 }
 
 const SHAPE_DEF_LOOKUP: Map<string, { id: string; cells: Array<{ x: number; y: number }> }> =
@@ -1299,9 +1358,9 @@ export function observeSeat(
   const seat = state.seats.find((s) => s.seatId === seatId)!;
   const window = state.window;
   const bidState = window?.bids[seatId];
-  const privateIntel = state.intel.filter(
-    (r) => r.visibility.kind === "seat" && r.visibility.seatId === seatId,
-  );
+  const privateIntel = state.intel
+    .filter((r) => r.visibility.kind === "seat" && r.visibility.seatId === seatId)
+    .map((r) => projectIntelRecord(state, r, state.lot?.generatorId === "synthetic.v2" && state.phase.kind !== "completed"));
   return {
     ...base,
     viewer: seatId,
@@ -1325,22 +1384,28 @@ function projectView(
 ): Omit<SeatObservation, "mySeat" | "legalActions"> | PublicView {
   setCatalogLookup(runtime);
   const knowledge = knowledgeOf(state, viewer);
-  const slots: SlotPublicView[] = (state.lot?.slots ?? []).map((slot) => {
-    const fields = knowledge.get(slot.slotId) ?? {};
-    return {
-      slotId: slot.slotId,
-      knownFields: {
-        ...(fields.tier !== undefined ? { tier: fields.tier as TierId } : {}),
-        ...(fields.category !== undefined ? { category: fields.category as CategoryId } : {}),
-        ...(fields.shape !== undefined ? { shape: fields.shape as string } : {}),
-        ...(fields.identity !== undefined ? { identity: fields.identity as ItemId } : {}),
-        ...(fields.value !== undefined ? { value: fields.value as number } : {}),
-      },
-      candidates: candidatesForSlot(runtime, state, viewer, slot.slotId),
-    };
-  });
+  const isV2 = state.lot?.generatorId === "synthetic.v2";
+  const concealSlots = isV2 && state.phase.kind !== "completed";
+  const slots: SlotPublicView[] = concealSlots
+    ? []
+    : (state.lot?.slots ?? []).map((slot) => {
+        const fields = knowledge.get(slot.slotId) ?? {};
+        return {
+          slotId: slot.slotId,
+          knownFields: {
+            ...(fields.tier !== undefined ? { tier: fields.tier as TierId } : {}),
+            ...(fields.category !== undefined ? { category: fields.category as CategoryId } : {}),
+            ...(fields.shape !== undefined ? { shape: fields.shape as string } : {}),
+            ...(fields.identity !== undefined ? { identity: fields.identity as ItemId } : {}),
+            ...(fields.value !== undefined ? { value: fields.value as number } : {}),
+          },
+          candidates: candidatesForSlot(runtime, state, viewer, slot.slotId),
+        };
+      });
 
-  const publicIntel = state.intel.filter((r) => r.visibility.kind === "public");
+  const publicIntel = state.intel
+    .filter((r) => r.visibility.kind === "public")
+    .map((r) => projectIntelRecord(state, r, concealSlots));
   const window = state.window;
   const result = state.phase.kind === "completed" ? state.phase.result : undefined;
 
@@ -1560,4 +1625,24 @@ function projectPublicEvents(state: MatchState): PublicEventView[] {
 
   events.sort((a, b) => a.revision - b.revision || a.id.localeCompare(b.id));
   return events;
+}
+
+function projectIntelRecord(
+  state: MatchState,
+  record: IntelRecord,
+  concealSlotIds: boolean,
+): PublicIntelRecordView {
+  const fact = record.fact;
+  if (fact.kind === "field") {
+    const { slotId, ...rest } = fact;
+    if (concealSlotIds) {
+      const revealId = state.revealTokenBySlot?.[slotId];
+      return {
+        ...record,
+        fact: { ...rest, ...(revealId ? { revealId } : {}) },
+      };
+    }
+    return { ...record, fact: { ...rest, slotId } };
+  }
+  return { ...record, fact };
 }

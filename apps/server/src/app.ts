@@ -20,7 +20,7 @@ import {
   type ServerEnvelope,
 } from "@qiju/contracts";
 import type { GameCommand, SeatId } from "@qiju/game-core";
-import { compileDemoV1 } from "@qiju/rules-demo";
+import { compileDemoV2 } from "@qiju/rules-demo";
 import { agentById, BUILTIN_AGENTS, type Agent } from "@qiju/agents";
 import {
   RoomManager,
@@ -96,7 +96,7 @@ export async function buildApp(envOverrides?: Partial<AppEnv> & Record<string, s
   }
   const cookieSecret = env.COOKIE_SECRET ?? "dev-only-insecure-secret-change-me";
 
-  const runtime = compileDemoV1();
+  const runtime = compileDemoV2();
   const clock = new SystemClock();
   const connections = new Map<string, Set<{ socket: WebSocket; ctx: ConnectionContext }>>();
 
@@ -178,6 +178,7 @@ export async function buildApp(envOverrides?: Partial<AppEnv> & Record<string, s
       ruleBundles: [
         { id: runtime.manifest.ruleBundleId, version: runtime.manifest.semanticVersion, hash: runtime.manifestHash },
       ],
+      contentBundleId: runtime.manifest.contentBundleId,
       modes: ["human-vs-ai", "all-ai"],
       productName: BRAND.productName,
       allowFixedSeed: env.ALLOW_FIXED_SEED,
@@ -187,7 +188,7 @@ export async function buildApp(envOverrides?: Partial<AppEnv> & Record<string, s
 
   app.get("/api/v1/content/:bundle/:locale", async (request, reply) => {
     const params = request.params as { bundle: string; locale: string };
-    if (params.bundle !== "content.synthetic.v0") {
+    if (params.bundle !== runtime.manifest.contentBundleId) {
       return reply.code(404).send({ error: "MATCH_NOT_FOUND_OR_FORBIDDEN" });
     }
     const locale = params.locale === "en" ? "en" : "zh-CN";

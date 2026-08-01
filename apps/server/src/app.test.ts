@@ -53,8 +53,8 @@ describe("server integration", () => {
   });
 
   it("content endpoint serves both locales with identical key sets", async () => {
-    const zh = await app.inject({ method: "GET", url: "/api/v1/content/content.synthetic.v0/zh-CN" });
-    const en = await app.inject({ method: "GET", url: "/api/v1/content/content.synthetic.v0/en" });
+    const zh = await app.inject({ method: "GET", url: "/api/v1/content/content.synthetic.v2/zh-CN" });
+    const en = await app.inject({ method: "GET", url: "/api/v1/content/content.synthetic.v2/en" });
     expect(zh.statusCode).toBe(200);
     expect(en.statusCode).toBe(200);
     const zhKeys = Object.keys((zh.json() as { strings: Record<string, string> }).strings).sort();

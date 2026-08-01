@@ -26,7 +26,7 @@ export interface RuleBundleManifest {
   ruleBundleId: "demo.v0";
   semanticVersion: "0.1.0";
   coreProtocol: 1;
-  contentBundleId: "content.synthetic.v0" | "content.synthetic.v1";
+  contentBundleId: "content.synthetic.v0" | "content.synthetic.v1" | "content.synthetic.v2";
   rngAlgorithm: "rng.xoshiro128ss.v1";
 }
 
@@ -305,6 +305,36 @@ export interface SlotPublicView {
   candidates: CandidateRange;
 }
 
+export type PublicIntelFactView =
+  | {
+      kind: "field";
+      slotId?: SlotId;
+      revealId?: string;
+      field: IntelFieldKind;
+      tier?: TierId;
+      category?: CategoryId;
+      shapeId?: string;
+      itemId?: ItemId;
+      value?: number;
+    }
+  | {
+      kind: "aggregate";
+      metric: "count" | "meanValueFloor";
+      dimension: "tier" | "category";
+      key: string;
+      value: number;
+    }
+  | { kind: "exhausted" };
+
+export interface PublicIntelRecordView {
+  fact: PublicIntelFactView;
+  visibility: IntelVisibility;
+  sourceId: string;
+  round: number;
+  effectInstanceId: string;
+  revision?: number;
+}
+
 export interface BoardCellView {
   x: number;
   y: number;
@@ -350,7 +380,7 @@ export interface PublicView {
   startingBudget: number;
   slots: SlotPublicView[];
   board?: LotBoardView;
-  publicIntel: IntelRecord[];
+  publicIntel: PublicIntelRecordView[];
   publicEvents?: PublicEventView[];
   loadouts?: Array<{ seatId: SeatId; analystId: AnalystId; toolPackageId: ToolPackageId }>;
   window?: {
@@ -375,7 +405,7 @@ export interface SeatObservation extends Omit<PublicView, "viewer"> {
     toolCharges: Record<string, number>;
     currentBid?: number;
     currentBidLocked?: boolean;
-    privateIntel: IntelRecord[];
+    privateIntel: PublicIntelRecordView[];
   };
   legalActions: LegalActionSet;
 }

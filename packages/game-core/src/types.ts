@@ -61,6 +61,7 @@ export interface ItemDef {
   tier: TierId;
   shapeId: ShapeId;
   value: number;
+  footprint?: { width: number; height: number };
 }
 
 export type IntelEffectSelector =
@@ -134,7 +135,17 @@ export interface ContentSyntheticV1 {
   toolPackages: ToolPackageDef[];
 }
 
-export type ContentSynthetic = ContentSyntheticV0 | ContentSyntheticV1;
+export interface ContentSyntheticV2 {
+  contentBundleId: "content.synthetic.v2";
+  schemaVersion: 1;
+  catalog: ItemDef[];
+  lotPolicy: LotPolicyV1;
+  publicIntelPool: PublicIntelPoolEntry[];
+  analysts: AnalystDef[];
+  toolPackages: ToolPackageDef[];
+}
+
+export type ContentSynthetic = ContentSyntheticV0 | ContentSyntheticV1 | ContentSyntheticV2;
 
 export interface LotPlacement {
   slotId: SlotId;
@@ -143,7 +154,7 @@ export interface LotPlacement {
 }
 
 export interface GeneratedLot {
-  generatorId: "synthetic.v0" | "synthetic.v1";
+  generatorId: "synthetic.v0" | "synthetic.v1" | "synthetic.v2";
   hiddenProfile: ProfileId;
   hiddenThemeCategories: [CategoryId, CategoryId];
   slots: Array<{ slotId: SlotId; itemId: ItemId }>;

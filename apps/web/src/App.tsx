@@ -28,18 +28,19 @@ export function App() {
 
   useEffect(() => {
     void (async () => {
-      const [capRes, localeRes] = await Promise.all([
-        fetch("/api/v1/capabilities"),
-        fetch(`/api/v1/content/content.synthetic.v0/${locale}`),
-      ]);
+      const capRes = await fetch("/api/v1/capabilities");
+      let contentBundleId = "content.synthetic.v2";
       if (capRes.ok) {
         const cap = (await capRes.json()) as {
           productName: { "zh-CN": string; en: string };
           allowFixedSeed: boolean;
+          contentBundleId?: string;
         };
         setProductName(cap.productName);
         setAllowFixedSeed(cap.allowFixedSeed);
+        if (cap.contentBundleId) contentBundleId = cap.contentBundleId;
       }
+      const localeRes = await fetch(`/api/v1/content/${contentBundleId}/${locale}`);
       if (localeRes.ok) {
         const data = (await localeRes.json()) as { strings: Strings };
         setStrings(data.strings);

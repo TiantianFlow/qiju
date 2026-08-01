@@ -5,14 +5,16 @@ import {
   type RuleBundleManifest,
 } from "@qiju/game-core";
 import type { ContentSynthetic, ItemDef, ItemId } from "@qiju/game-core";
-import { buildContentSyntheticV0, buildContentSyntheticV1, ZH_CN, EN } from "@qiju/content-demo";
+import { buildContentSyntheticV0, buildContentSyntheticV1, buildContentSyntheticV2, ZH_CN, EN } from "@qiju/content-demo";
 
 function compileContent(content: ContentSynthetic): CompiledRuleRuntime {
   const catalog = new Map<ItemId, ItemDef>();
   for (const item of content.catalog) catalog.set(item.id, item);
   const catalogSorted = [...content.catalog].sort((a, b) => a.id.localeCompare(b.id));
 
-  registerShapes(content.shapes.map((s) => ({ id: s.id, cells: s.cells.map((c) => ({ ...c })) })));
+  if ("shapes" in content) {
+    registerShapes(content.shapes.map((s) => ({ id: s.id, cells: s.cells.map((c) => ({ ...c })) })));
+  }
 
   const manifest: RuleBundleManifest = {
     ruleBundleId: "demo.v0",
@@ -25,7 +27,7 @@ function compileContent(content: ContentSynthetic): CompiledRuleRuntime {
   const contentHash = canonicalHash(content as unknown as Record<string, unknown>);
   const manifestHash = canonicalHash({ ...manifest, contentHash });
 
-  const isV1 = content.contentBundleId === "content.synthetic.v1";
+  const isV1 = content.contentBundleId === "content.synthetic.v1" || content.contentBundleId === "content.synthetic.v2";
 
   return {
     manifest,
@@ -115,4 +117,8 @@ export function compileDemoV0(): CompiledRuleRuntime {
 
 export function compileDemoV1(): CompiledRuleRuntime {
   return compileContent(buildContentSyntheticV1());
+}
+
+export function compileDemoV2(): CompiledRuleRuntime {
+  return compileContent(buildContentSyntheticV2());
 }

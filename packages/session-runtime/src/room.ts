@@ -252,18 +252,22 @@ export class RoomExecutor {
     const state = this.state;
     if (state.phase.kind === "completed") return "completed";
     if (state.phase.kind === "setup") return "setup-progress";
+    const window = state.window;
+    if (window) {
+      const lockedCount = window.participants.filter((p) => window.bids[p]?.locked).length;
+      const bidCount = window.participants.filter((p) => window.bids[p]).length;
+      if (lockedCount === window.participants.length) return "bids-ready";
+      if (bidCount > 0) return "bids-progress";
+    }
     const lastReveal = state.reveals[state.reveals.length - 1];
-    if (lastReveal && lastReveal.revision === state.revision) {
+    if (lastReveal && (window === undefined || window.round > lastReveal.round)) {
       return lastReveal.outcome === "continue" ? "bids-revealed" : "round-outcome";
     }
-    const window = state.window;
-    if (!window) return "round-outcome";
-    const lockedCount = window.participants.filter((p) => window.bids[p]?.locked).length;
-    const bidCount = window.participants.filter((p) => window.bids[p]).length;
-    if (lockedCount === window.participants.length) return "bids-ready";
-    if (bidCount > 0) return "bids-progress";
-    const roundIntel = state.intel.some((r) => r.round === state.round);
-    return roundIntel ? "round-intel" : "auction-ready";
+    if (window) {
+      const roundIntel = state.intel.some((r) => r.round === state.round);
+      return roundIntel ? "round-intel" : "auction-ready";
+    }
+    return "round-outcome";
   }
 
   private static readonly MAX_STEP_ACTIONS = 64;

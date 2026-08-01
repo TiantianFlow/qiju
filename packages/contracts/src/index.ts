@@ -76,6 +76,7 @@ export interface CapabilitiesResponse {
   locales: string[];
   defaultLocale: string;
   ruleBundles: Array<{ id: string; version: string; hash: string }>;
+  contentBundleId?: string;
   modes: string[];
   productName: { "zh-CN": string; en: string };
   allowFixedSeed: boolean;

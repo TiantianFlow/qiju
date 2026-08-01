@@ -3,6 +3,7 @@ import type {
   CategoryId,
   ContentSyntheticV0,
   ContentSyntheticV1,
+  ContentSyntheticV2,
   IntelEffectDef,
   ItemDef,
   ItemId,
@@ -374,6 +375,77 @@ export function buildContentSyntheticV1(): ContentSyntheticV1 {
     schemaVersion: 1,
     catalog: buildCatalog(),
     shapes: buildShapes(),
+    lotPolicy: {
+      profiles: [
+        { id: "lean", drawWeight: 20, tierWeights: [16, 6, 2, 1] },
+        { id: "standard", drawWeight: 50, tierWeights: [10, 8, 4, 1] },
+        { id: "premium", drawWeight: 25, tierWeights: [4, 8, 8, 3] },
+        { id: "jackpot", drawWeight: 5, tierWeights: [4, 6, 8, 10] },
+      ],
+      themeBoostFactor: 3,
+      countMin: 8,
+      countMax: 12,
+      board: { width: 10, height: 10, maxAttempts: 64 },
+    },
+    publicIntelPool: buildPublicIntelPoolV1(),
+    analysts: buildAnalysts(),
+    toolPackages: buildToolPackages(),
+  };
+}
+
+const RECT_BY_TIER: Record<TierId, Array<[number, number]>> = {
+  documented: [
+    [1, 1],
+    [2, 1],
+  ],
+  scarce: [
+    [2, 1],
+    [1, 2],
+    [2, 2],
+  ],
+  exceptional: [
+    [2, 2],
+    [3, 1],
+    [2, 3],
+    [3, 2],
+  ],
+  singular: [
+    [3, 2],
+    [2, 3],
+    [3, 3],
+    [4, 2],
+  ],
+};
+
+export function footprintForV2(tier: TierId, categoryIndex: number): { width: number; height: number } {
+  const options = RECT_BY_TIER[tier];
+  const [width, height] = options[categoryIndex % options.length]!;
+  return { width, height };
+}
+
+export function buildCatalogV2(): ItemDef[] {
+  const catalog: ItemDef[] = [];
+  CATEGORY_ORDER.forEach((category, ci) => {
+    for (const tier of TIER_ORDER) {
+      catalog.push({
+        id: `syn.${category}.${tier}` as ItemId,
+        nameKey: `item.syn.${category}.${tier}.name`,
+        category,
+        tier,
+        shapeId: "single",
+        value: computeValue(tier, category),
+        footprint: footprintForV2(tier, ci),
+      });
+    }
+  });
+  return catalog;
+}
+
+export function buildContentSyntheticV2(): ContentSyntheticV2 {
+  return {
+    contentBundleId: "content.synthetic.v2",
+    schemaVersion: 1,
+    catalog: buildCatalogV2(),
     lotPolicy: {
       profiles: [
         { id: "lean", drawWeight: 20, tierWeights: [16, 6, 2, 1] },

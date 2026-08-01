@@ -274,16 +274,16 @@ describe("demo.v0 core", () => {
     const known2 = new Map<string, Set<string>>();
     for (const r of obs2.mySeat.privateIntel) {
       if (r.fact.kind !== "field") continue;
-      const set = known2.get(r.fact.slotId) ?? new Set<string>();
+      const set = known2.get(r.fact.slotId!) ?? new Set<string>();
       set.add(r.fact.field);
-      known2.set(r.fact.slotId, set);
+      known2.set(r.fact.slotId!, set);
     }
     const knownPub = new Map<string, Set<string>>();
     for (const r of pub.publicIntel) {
       if (r.fact.kind !== "field") continue;
-      const set = knownPub.get(r.fact.slotId) ?? new Set<string>();
+      const set = knownPub.get(r.fact.slotId!) ?? new Set<string>();
       set.add(r.fact.field);
-      knownPub.set(r.fact.slotId, set);
+      knownPub.set(r.fact.slotId!, set);
     }
     for (const slot of obs2.slots) {
       const allowed = new Set([...(known2.get(slot.slotId) ?? []), ...(knownPub.get(slot.slotId) ?? [])]);
