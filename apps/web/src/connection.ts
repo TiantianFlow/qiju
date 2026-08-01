@@ -7,7 +7,11 @@ export class MatchConnection {
   private listeners = new Set<Listener>();
   view: MatchView | null = null;
   deadlineAtMs: number | null = null;
-  demo = { paused: false, speed: 1 };
+  demo: { paused: boolean; speed: number; presentation?: { seq: number; kind: string } | null } = {
+    paused: false,
+    speed: 1,
+    presentation: null,
+  };
   connected = false;
   fatal = false;
   lastRejection: string | null = null;

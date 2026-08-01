@@ -260,46 +260,80 @@ describe("session runtime (in-memory, FakeClock)", () => {
     });
   }
 
-  it("new demo starts paused: time passing does not advance the match", async () => {
+  it("new demo starts paused at an understandable round-1 ready state with no human deadline", async () => {
     const clock = new FakeClock(0);
     const manager = createDemoManager(clock);
     const { events } = collectEvents();
     const room = manager.createAllAi({ matchId: "paused-demo", seed: "p1", events });
+    await room.initializeDemoToAuctionReady();
     expect(room.demoState.paused).toBe(true);
+    expect(room.demoState.presentation?.kind).toBe("auction-ready");
+    expect(room.phaseKind).toBe("auction");
+    expect(room.currentState.round).toBe(1);
+    expect(room.activeDeadlineAtMs).toBeNull();
     clock.advanceBy(120_000);
     await room.kick();
-    expect(room.revision).toBe(0);
-    expect(room.acceptedEvents.length).toBe(0);
+    const revision = room.revision;
+    const eventCount = room.acceptedEvents.length;
+    clock.advanceBy(120_000);
+    expect(room.revision).toBe(revision);
+    expect(room.acceptedEvents.length).toBe(eventCount);
+    expect(room.demoState.presentation?.kind).toBe("auction-ready");
   });
 
-  it("a single step causes exactly one visible transition and stays paused", async () => {
+  it("every step advances presentation sequence by exactly one and changes visible state", async () => {
     const clock = new FakeClock(0);
     const manager = createDemoManager(clock);
     const { events } = collectEvents();
     const room = manager.createAllAi({ matchId: "step-demo", seed: "s1", events });
+    await room.initializeDemoToAuctionReady();
+    const initialSeq = room.demoState.presentation?.seq ?? 0;
     const first = await room.demoStep();
     expect(first.changed).toBe(true);
-    expect(first.revision).toBe(1);
+    expect(first.checkpoint?.seq).toBe(initialSeq + 1);
     expect(room.demoState.paused).toBe(true);
     const second = await room.demoStep();
     expect(second.changed).toBe(true);
-    expect(second.revision).toBe(2);
+    expect(second.checkpoint?.seq).toBe(initialSeq + 2);
+    expect(second.checkpoint?.kind).not.toBe(first.checkpoint?.kind);
     expect(room.demoState.paused).toBe(true);
     clock.advanceBy(120_000);
-    expect(room.revision).toBe(2);
+    expect(room.demoState.presentation?.seq).toBe(initialSeq + 2);
+  });
+
+  it("step consumes multiple internal actions when needed but yields one checkpoint", async () => {
+    const clock = new FakeClock(0);
+    const manager = createDemoManager(clock);
+    const { events } = collectEvents();
+    const room = manager.createAllAi({ matchId: "step-all", seed: "s2", events });
+    await room.initializeDemoToAuctionReady();
+    let guard = 0;
+    const seen = new Set<string>();
+    for (;;) {
+      if (room.isCompleted && room.demoState.presentation?.kind === "completed") break;
+      const step = await room.demoStep();
+      expect(step.changed).toBe(true);
+      expect(step.checkpoint).not.toBeNull();
+      seen.add(`${step.checkpoint!.seq}:${step.checkpoint!.kind}`);
+      if (guard++ > 60) throw new Error("too many checkpoints");
+    }
+    expect(room.demoState.paused).toBe(true);
+    expect(room.demoState.presentation?.kind).toBe("completed");
+    expect(seen.size).toBeGreaterThan(3);
   });
 
   it("repeated steps complete the match and every step changes something", async () => {
     const clock = new FakeClock(0);
     const manager = createDemoManager(clock);
     const { events, completed } = collectEvents();
-    const room = manager.createAllAi({ matchId: "step-all", seed: "s2", events });
+    const room = manager.createAllAi({ matchId: "step-complete", seed: "s2b", events });
+    await room.initializeDemoToAuctionReady();
     let guard = 0;
     for (;;) {
-      if (room.isCompleted) break;
+      if (room.isCompleted && room.demoState.presentation?.kind === "completed") break;
       const step = await room.demoStep();
       expect(step.changed).toBe(true);
-      if (guard++ > 500) throw new Error("too many steps");
+      if (guard++ > 60) throw new Error("too many steps");
     }
     expect(completed.length).toBe(1);
     expect(room.demoState.paused).toBe(true);
@@ -369,5 +403,76 @@ describe("session runtime (in-memory, FakeClock)", () => {
     expect(b.hash).toBe(c.hash);
     expect(a.eventTypes).toEqual(b.eventTypes);
     expect(b.eventTypes).toEqual(c.eventTypes);
+  });
+});
+
+describe("human action window timing", () => {
+  function createHumanManager(clock: FakeClock) {
+    return new RoomManager({
+      runtime,
+      clock,
+      agentPool: {
+        humanVsAiAgents: () => BUILTIN_AGENTS.slice(0, 4) as never,
+        allAiAgents: () => BUILTIN_AGENTS.slice(0, 4) as never,
+      },
+    });
+  }
+
+  async function startAuction(clock: FakeClock) {
+    const manager = createHumanManager(clock);
+    const { events } = collectEvents();
+    const room = manager.createHumanVsAi({
+      matchId: "timing",
+      seed: "timing-seed",
+      humanPrincipalId: "p1",
+      events,
+    });
+    await submitHuman(room, "t-sel", {
+      kind: "select_loadout",
+      seatId: "seat1",
+      analystId: "analyst.surveyor",
+      toolPackageId: "kit.survey",
+    });
+    await submitHuman(room, "t-lock", { kind: "lock_setup", seatId: "seat1" });
+    await room.kick();
+    return { room, clock };
+  }
+
+  it("human window is 120000ms and deadline is accepted before, rejected after", async () => {
+    const clock = new FakeClock(1000);
+    const { room } = await startAuction(clock);
+    const deadline = room.activeDeadlineAtMs;
+    expect(deadline).toBe(1000 + 120000);
+
+    const windowId = room.currentState.window!.actionWindowId;
+    const bid = await submitHuman(room, "t-bid", {
+      kind: "submit_bid",
+      seatId: "seat1",
+      amount: 100,
+      actionWindowId: windowId,
+    });
+    expect(bid.accepted).toBe(true);
+
+    clock.advanceBy(118999);
+    await room.kick();
+    expect(room.currentState.window?.actionWindowId).toBe(windowId);
+
+    clock.advanceBy(1201);
+    await room.kick();
+    await room.kick();
+    await room.kick();
+    expect(room.currentState.window?.actionWindowId).not.toBe(windowId);
+  });
+
+  it("deadline does not reset or go stale across the window", async () => {
+    const clock = new FakeClock(5000);
+    const { room } = await startAuction(clock);
+    const first = room.activeDeadlineAtMs;
+    clock.advanceBy(30_000);
+    await room.kick();
+    expect(room.activeDeadlineAtMs).toBe(first);
+    clock.advanceBy(30_000);
+    await room.kick();
+    expect(room.activeDeadlineAtMs).toBe(first);
   });
 });

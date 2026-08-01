@@ -237,6 +237,7 @@ export function createMatch(input: {
   matchId: string;
   seed: string;
   runtime: CompiledRuleRuntime;
+  deadlineDelayMs?: number;
 }): MatchState {
   return {
     matchId: input.matchId,
@@ -257,6 +258,7 @@ export function createMatch(input: {
     reveals: [],
     streams: {},
     toolUseOrdinal: {},
+    ...(input.deadlineDelayMs !== undefined ? { deadlineDelayMs: input.deadlineDelayMs } : {}),
   };
 }
 
@@ -1097,7 +1099,7 @@ function handleLockSetup(
     startAuction(next, runtime, events);
     const windowId = next.window?.actionWindowId;
     if (windowId) {
-      effects.push({ kind: "schedule_deadline", actionWindowId: windowId, delayMs: 30000 });
+      effects.push({ kind: "schedule_deadline", actionWindowId: windowId, delayMs: next.deadlineDelayMs ?? 0 });
       for (const seatId of SEAT_IDS) {
         effects.push({ kind: "request_agent_decision", seatId, observationRevision: next.revision + 1 });
       }
@@ -1233,7 +1235,7 @@ function handleLockBid(
       effects.push({
         kind: "schedule_deadline",
         actionWindowId: next.window.actionWindowId,
-        delayMs: 30000,
+        delayMs: next.deadlineDelayMs ?? 0,
       });
       for (const seatId of next.window.participants) {
         effects.push({ kind: "request_agent_decision", seatId, observationRevision: next.revision + 1 });
@@ -1272,7 +1274,7 @@ function handleDeadline(
     effects.push({
       kind: "schedule_deadline",
       actionWindowId: next.window.actionWindowId,
-      delayMs: 30000,
+      delayMs: next.deadlineDelayMs ?? 0,
     });
     for (const seatId of next.window.participants) {
       effects.push({ kind: "request_agent_decision", seatId, observationRevision: next.revision + 1 });

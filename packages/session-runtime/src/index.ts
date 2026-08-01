@@ -74,7 +74,11 @@ export class RoomManager {
       mode,
     });
     this.rooms.set(input.matchId, room);
-    void room.kick();
+    if (mode === "all-ai") {
+      void room.initializeDemoToAuctionReady();
+    } else {
+      void room.kick();
+    }
     return room;
   }
 

@@ -241,6 +241,7 @@ export interface MatchState {
   reveals: RoundRevealRecord[];
   streams: Record<string, RngStreamState>;
   toolUseOrdinal: Partial<Record<SeatId, number>>;
+  deadlineDelayMs?: number;
 }
 
 export type GameCommand =

@@ -155,9 +155,11 @@ export function TablePage({
             ? t(strings, "table.tiebreak")
             : t(strings, "table.round", { round: view.round })}
         </h2>
-        <span className="revision" data-testid="revision">
-          rev {view.revision}
-        </span>
+        {isObserver && connection.demo.presentation ? (
+          <span className="presentation" data-testid="presentation">
+            {t(strings, `presentation.${connection.demo.presentation.kind}`)}
+          </span>
+        ) : null}
         {remaining !== null ? (
           <span className="deadline" role="timer" data-testid="deadline">
             {t(strings, "table.deadline", { seconds: remaining })}

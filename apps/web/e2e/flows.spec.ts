@@ -21,7 +21,7 @@ test.describe("home page", () => {
 
 test.describe("human vs AI match", () => {
   test("complete a full match from home to result", async ({ page }) => {
-    test.setTimeout(180_000);
+    test.setTimeout(300_000);
     await page.goto("/");
     await page.getByTestId("play-vs-ai").click();
 
@@ -30,7 +30,13 @@ test.describe("human vs AI match", () => {
     await page.getByTestId("kit-kit.appraisal").click();
     await page.getByTestId("lock-setup").click();
 
-    for (let round = 0; round < 12; round++) {
+    await expect(page.getByTestId("deadline")).toBeVisible({ timeout: 15_000 });
+    const firstDeadline = await page.getByTestId("deadline").textContent();
+    const firstSeconds = Number((firstDeadline ?? "").replace(/\D+/g, ""));
+    expect(firstSeconds).toBeGreaterThanOrEqual(115);
+    expect(firstSeconds).toBeLessThanOrEqual(120);
+
+    for (let round = 0; round < 7; round++) {
       const resultVisible = await page
         .getByTestId("restart")
         .isVisible()
@@ -40,7 +46,7 @@ test.describe("human vs AI match", () => {
       const bidInput = page.getByTestId("bid-input");
       const canBid = await bidInput.isVisible().catch(() => false);
       if (canBid) {
-        await bidInput.fill("2500");
+        await bidInput.fill("0");
         await page.getByTestId("submit-bid").click();
       }
       const lockButton = page.getByTestId("lock-bid");
@@ -48,7 +54,12 @@ test.describe("human vs AI match", () => {
       if (canLock) {
         await lockButton.click();
       }
-      await page.waitForTimeout(32_000);
+      const deadlineEl = page.getByTestId("deadline");
+      if (await deadlineEl.isVisible().catch(() => false)) {
+        await expect(deadlineEl).toBeHidden({ timeout: 130_000 });
+      } else {
+        await page.waitForTimeout(2_000);
+      }
     }
 
     await expect(page.getByTestId("restart")).toBeVisible({ timeout: 60_000 });
@@ -67,13 +78,18 @@ test.describe("all-AI demo", () => {
     await page.getByTestId("watch-demo").click();
 
     await expect(page.getByTestId("demo-controls")).toBeVisible({ timeout: 15_000 });
-    const revisionText = async () => (await page.getByTestId("revision").textContent()) ?? "";
-    const before = await revisionText();
+    await expect(page.getByTestId("presentation")).toBeVisible({ timeout: 15_000 });
+    const presentationText = async () => (await page.getByTestId("presentation").textContent()) ?? "";
+    const mainHtml = await page.locator("main").innerHTML();
+    expect(mainHtml).not.toMatch(/\brev\b/i);
+    await expect(page.getByTestId("deadline")).toHaveCount(0);
+    const before = await presentationText();
+    expect(before).toContain("准备完成");
     await page.getByTestId("demo-step").click();
-    await expect.poll(revisionText, { timeout: 5_000 }).not.toBe(before);
-    const afterOne = await revisionText();
+    await expect.poll(presentationText, { timeout: 5_000 }).not.toBe(before);
+    const afterOne = await presentationText();
     await page.getByTestId("demo-step").click();
-    await expect.poll(revisionText, { timeout: 5_000 }).not.toBe(afterOne);
+    await expect.poll(presentationText, { timeout: 5_000 }).not.toBe(afterOne);
     await page.getByTestId("demo-speed").selectOption("8");
     await page.getByTestId("demo-resume").click();
 
