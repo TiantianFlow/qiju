@@ -1455,7 +1455,6 @@ function projectBoard(
 function projectPublicEvents(state: MatchState): PublicEventView[] {
   const events: PublicEventView[] = [];
 
-  const toolUseByInstance = new Map<string, { seatId: SeatId; toolId: string }>();
   for (const reveal of state.reveals) {
     for (const [seatId, toolId] of Object.entries(reveal.toolUsed)) {
       if (!toolId) continue;
