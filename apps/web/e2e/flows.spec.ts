@@ -67,8 +67,13 @@ test.describe("all-AI demo", () => {
     await page.getByTestId("watch-demo").click();
 
     await expect(page.getByTestId("demo-controls")).toBeVisible({ timeout: 15_000 });
+    const revisionText = async () => (await page.getByTestId("revision").textContent()) ?? "";
+    const before = await revisionText();
     await page.getByTestId("demo-step").click();
-    await page.waitForTimeout(500);
+    await expect.poll(revisionText, { timeout: 5_000 }).not.toBe(before);
+    const afterOne = await revisionText();
+    await page.getByTestId("demo-step").click();
+    await expect.poll(revisionText, { timeout: 5_000 }).not.toBe(afterOne);
     await page.getByTestId("demo-speed").selectOption("8");
     await page.getByTestId("demo-resume").click();
 

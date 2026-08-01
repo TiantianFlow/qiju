@@ -66,6 +66,11 @@ export class MatchConnection {
       }
       case "match_completed":
         break;
+      case "demo_state": {
+        const payload = envelope.payload as { paused: boolean; speed: number };
+        this.demo = payload;
+        break;
+      }
       case "fatal_error":
         this.fatal = true;
         break;

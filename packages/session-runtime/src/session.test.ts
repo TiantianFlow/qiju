@@ -206,7 +206,7 @@ describe("session runtime (in-memory, FakeClock)", () => {
     expect(r.rejectionCode).toBe("STALE_REVISION");
   });
 
-  it("all-ai demo completes under FakeClock with pause/step controls", async () => {
+  it("all-ai demo completes under FakeClock when running", async () => {
     const clock = new FakeClock(0);
     const manager = new RoomManager({
       runtime,
@@ -220,7 +220,7 @@ describe("session runtime (in-memory, FakeClock)", () => {
     const room = manager.createAllAi({ matchId: "demo", seed: "demo-1", events, startPaused: false });
     room.setDemoSpeed(4);
     let guard = 0;
-    while (!room.isCompleted && guard++ < 100) {
+    while (!room.isCompleted && guard++ < 200) {
       clock.advanceBy(2_000);
       await room.kick();
     }
@@ -247,5 +247,127 @@ describe("session runtime (in-memory, FakeClock)", () => {
     const json = JSON.stringify(view);
     expect(json).not.toContain("privateIntel");
     expect(json).not.toContain("hiddenProfile");
+  });
+
+  function createDemoManager(clock: FakeClock) {
+    return new RoomManager({
+      runtime,
+      clock,
+      agentPool: {
+        humanVsAiAgents: () => BUILTIN_AGENTS.slice(0, 4) as never,
+        allAiAgents: () => BUILTIN_AGENTS.slice(0, 4) as never,
+      },
+    });
+  }
+
+  it("new demo starts paused: time passing does not advance the match", async () => {
+    const clock = new FakeClock(0);
+    const manager = createDemoManager(clock);
+    const { events } = collectEvents();
+    const room = manager.createAllAi({ matchId: "paused-demo", seed: "p1", events });
+    expect(room.demoState.paused).toBe(true);
+    clock.advanceBy(120_000);
+    await room.kick();
+    expect(room.revision).toBe(0);
+    expect(room.acceptedEvents.length).toBe(0);
+  });
+
+  it("a single step causes exactly one visible transition and stays paused", async () => {
+    const clock = new FakeClock(0);
+    const manager = createDemoManager(clock);
+    const { events } = collectEvents();
+    const room = manager.createAllAi({ matchId: "step-demo", seed: "s1", events });
+    const first = await room.demoStep();
+    expect(first.changed).toBe(true);
+    expect(first.revision).toBe(1);
+    expect(room.demoState.paused).toBe(true);
+    const second = await room.demoStep();
+    expect(second.changed).toBe(true);
+    expect(second.revision).toBe(2);
+    expect(room.demoState.paused).toBe(true);
+    clock.advanceBy(120_000);
+    expect(room.revision).toBe(2);
+  });
+
+  it("repeated steps complete the match and every step changes something", async () => {
+    const clock = new FakeClock(0);
+    const manager = createDemoManager(clock);
+    const { events, completed } = collectEvents();
+    const room = manager.createAllAi({ matchId: "step-all", seed: "s2", events });
+    let guard = 0;
+    for (;;) {
+      if (room.isCompleted) break;
+      const step = await room.demoStep();
+      expect(step.changed).toBe(true);
+      if (guard++ > 500) throw new Error("too many steps");
+    }
+    expect(completed.length).toBe(1);
+    expect(room.demoState.paused).toBe(true);
+  });
+
+  it("pause halts progress; resume continues automatically at the current speed", async () => {
+    const clock = new FakeClock(0);
+    const manager = createDemoManager(clock);
+    const { events } = collectEvents();
+    const room = manager.createAllAi({ matchId: "pr-demo", seed: "s3", events });
+    room.setDemoPaused(false);
+    let guard = 0;
+    while (room.revision === 0 && guard++ < 20) {
+      clock.advanceBy(50);
+      await room.kick();
+    }
+    const runningRevision = room.revision;
+    expect(runningRevision).toBeGreaterThan(0);
+    room.setDemoPaused(true);
+    const frozenRevision = room.revision;
+    const frozenEvents = room.acceptedEvents.length;
+    clock.advanceBy(600_000);
+    expect(room.revision).toBe(frozenRevision);
+    expect(room.acceptedEvents.length).toBe(frozenEvents);
+    room.setDemoPaused(false);
+    guard = 0;
+    while (room.revision === frozenRevision && guard++ < 20) {
+      clock.advanceBy(50);
+      await room.kick();
+    }
+    expect(room.revision).toBeGreaterThan(frozenRevision);
+  });
+
+  it("step, 1x and 8x produce identical core event sequences and final hashes", async () => {
+    const runMatch = async (mode: "step" | "speed1" | "speed8") => {
+      const clock = new FakeClock(0);
+      const manager = createDemoManager(clock);
+      const { events } = collectEvents();
+      const room = manager.createAllAi({ matchId: "det-uniform", seed: "det-seed", events });
+      if (mode === "step") {
+        let guard = 0;
+        while (!room.isCompleted && guard++ < 500) {
+          await room.demoStep();
+        }
+      } else {
+        room.setDemoSpeed(mode === "speed1" ? 1 : 8);
+        room.setDemoPaused(false);
+        let guard = 0;
+        while (!room.isCompleted && guard++ < 500) {
+          clock.advanceBy(5_000);
+          await room.kick();
+        }
+      }
+      return {
+        hash: room.snapshot().stateHash,
+        eventTypes: room.acceptedEvents.map((e) => `${e.type}:${JSON.stringify(e.payload)}`),
+        completed: room.isCompleted,
+      };
+    };
+    const a = await runMatch("step");
+    const b = await runMatch("speed1");
+    const c = await runMatch("speed8");
+    expect(a.completed).toBe(true);
+    expect(b.completed).toBe(true);
+    expect(c.completed).toBe(true);
+    expect(a.hash).toBe(b.hash);
+    expect(b.hash).toBe(c.hash);
+    expect(a.eventTypes).toEqual(b.eventTypes);
+    expect(b.eventTypes).toEqual(c.eventTypes);
   });
 });

@@ -95,9 +95,13 @@ export interface RoomConfig {
 
 interface PendingDeadline {
   actionWindowId: string;
-  handle: ClockTimerHandle;
+  handle: ClockTimerHandle | null;
   deadlineAtMs: number;
+  remainingMs: number;
+  suspended: boolean;
 }
+
+type DemoSchedulerState = "running" | "paused" | "stepping";
 
 export class RoomExecutor {
   private state: MatchState;
@@ -107,9 +111,9 @@ export class RoomExecutor {
   private queue: Promise<unknown> = Promise.resolve();
   private agentInFlight = new Set<string>();
   private readonly allEvents: DomainEvent[] = [];
-  private demoPaused = false;
+  private demoScheduler: DemoSchedulerState = "running";
   private demoSpeed = 1;
-  private demoAutoAdvance = true;
+  private pumpTimer: ClockTimerHandle | null = null;
 
   constructor(config: RoomConfig) {
     this.config = config;
@@ -157,7 +161,7 @@ export class RoomExecutor {
   }
 
   get demoState(): { paused: boolean; speed: number } {
-    return { paused: this.demoPaused, speed: this.demoSpeed };
+    return { paused: this.demoScheduler !== "running", speed: this.demoSpeed };
   }
 
   get acceptedEvents(): readonly DomainEvent[] {
@@ -201,26 +205,147 @@ export class RoomExecutor {
   }
 
   setDemoPaused(paused: boolean): void {
-    this.demoPaused = paused;
-    if (!paused) {
-      this.enqueue(async () => {
-        await this.driveAgents();
-      });
+    if (this.config.mode !== "all-ai") return;
+    if (paused) {
+      if (this.demoScheduler === "paused") return;
+      this.demoScheduler = "paused";
+      this.cancelPump();
+      this.suspendDeadline();
+      return;
     }
+    if (this.demoScheduler === "running") return;
+    this.demoScheduler = "running";
+    this.resumeDeadline();
+    this.enqueue(() => {
+      this.scheduleNextPump(0);
+      return undefined;
+    });
   }
 
   setDemoSpeed(speed: number): void {
     this.demoSpeed = Math.max(1, Math.min(8, speed));
-    if (!this.demoPaused && this.deadline && this.config.mode === "all-ai") {
-      const windowId = this.deadline.actionWindowId;
-      this.scheduleDeadline(windowId, 0);
-    }
   }
 
-  async demoStep(): Promise<void> {
-    await this.enqueue(async () => {
-      await this.driveAgents(1);
+  async demoStep(): Promise<{ changed: boolean; revision: number }> {
+    if (this.config.mode !== "all-ai") {
+      return { changed: false, revision: this.state.revision };
+    }
+    return this.enqueue(async () => {
+      if (this.isCompleted) return { changed: false, revision: this.state.revision };
+      const revisionBefore = this.state.revision;
+      const eventsBefore = this.allEvents.length;
+      this.demoScheduler = "stepping";
+      try {
+        await this.performOneSessionAction();
+      } finally {
+        this.demoScheduler = "paused";
+      }
+      this.cancelPump();
+      this.suspendDeadline();
+      const changed = this.state.revision !== revisionBefore || this.allEvents.length !== eventsBefore;
+      return { changed, revision: this.state.revision };
     });
+  }
+
+  private cancelPump(): void {
+    this.pumpTimer?.cancel();
+    this.pumpTimer = null;
+  }
+
+  private scheduleNextPump(delayMs: number): void {
+    if (this.config.mode !== "all-ai") return;
+    if (this.demoScheduler !== "running") return;
+    this.cancelPump();
+    if (this.isCompleted) return;
+    const clamped = Math.max(0, delayMs);
+    this.pumpTimer = this.config.clock.setTimeout(() => {
+      this.pumpTimer = null;
+      void this.enqueue(async () => {
+        await this.pumpOnce();
+      });
+    }, clamped);
+  }
+
+  private get remainingWork(): boolean {
+    if (this.isCompleted) return false;
+    for (const seat of this.config.seats) {
+      if (seat.kind !== "agent" || !seat.agent) continue;
+      if (this.state.phase.kind === "setup") {
+        const seatState = this.state.seats.find((s) => s.seatId === seat.seatId)!;
+        if (!seatState.setupLocked) return true;
+        continue;
+      }
+      const window = this.state.window;
+      if (!window) continue;
+      if (!window.participants.includes(seat.seatId)) continue;
+      if (window.bids[seat.seatId]?.locked !== true) return true;
+    }
+    return false;
+  }
+
+  private async pumpOnce(): Promise<void> {
+    if (this.demoScheduler !== "running" || this.isCompleted) return;
+    const progressed = await this.performOneSessionAction();
+    if (this.demoScheduler !== "running" || this.isCompleted) return;
+    const base = this.config.policy.demoStepDelayMs;
+    const delay = progressed ? Math.max(50, Math.floor(base / this.demoSpeed)) : 0;
+    this.scheduleNextPump(delay);
+  }
+
+  private async performOneSessionAction(): Promise<boolean> {
+    if (this.isCompleted) return false;
+
+    if (this.deadline && this.deadline.suspended) {
+      if (this.state.phase.kind !== "setup" && this.state.window) {
+        this.resumeDeadline();
+      }
+    }
+
+    const pendingAgent = this.config.seats.find((seat) => {
+      if (seat.kind !== "agent" || !seat.agent) return false;
+      if (this.state.phase.kind === "setup") {
+        const seatState = this.state.seats.find((s) => s.seatId === seat.seatId)!;
+        return !seatState.setupLocked;
+      }
+      const window = this.state.window;
+      if (!window) return false;
+      if (!window.participants.includes(seat.seatId)) return false;
+      return window.bids[seat.seatId]?.locked !== true;
+    });
+    if (pendingAgent) {
+      await this.decideForAgent(pendingAgent);
+      return true;
+    }
+
+    if (this.deadline) {
+      const windowId = this.deadline.actionWindowId;
+      const commandId = `deadline:${this.config.matchId}:${windowId}`;
+      this.deadline.handle?.cancel();
+      this.deadline = undefined;
+      const result = this.submitCommandInline({
+        commandId,
+        expectedRevision: this.state.revision,
+        seatId: null,
+        command: { kind: "deadline_reached", actionWindowId: windowId },
+        source: "system",
+      });
+      return result.accepted;
+    }
+    return false;
+  }
+
+  private suspendDeadline(): void {
+    if (!this.deadline || this.deadline.suspended) return;
+    const remaining = this.deadline.deadlineAtMs - this.config.clock.now();
+    this.deadline.handle?.cancel();
+    this.deadline.handle = null;
+    this.deadline.suspended = true;
+    this.deadline.remainingMs = Math.max(0, remaining);
+  }
+
+  private resumeDeadline(): void {
+    if (!this.deadline || !this.deadline.suspended) return;
+    this.deadline.suspended = false;
   }
 
   private enqueue<T>(task: () => Promise<T> | T): Promise<T> {
@@ -346,8 +471,9 @@ export class RoomExecutor {
   private afterAccepted(effects: readonly { kind: string }[]): void {
     this.publishViews();
     if (this.state.phase.kind === "completed") {
-      this.deadline?.handle.cancel();
+      this.deadline?.handle?.cancel();
       this.deadline = undefined;
+      this.cancelPump();
       const result = this.state.phase.result;
       this.config.events.onMatchCompleted(result, hashState(this.state));
       return;
@@ -358,31 +484,40 @@ export class RoomExecutor {
         this.scheduleDeadline(e.actionWindowId, e.delayMs);
       }
     }
+    if (this.config.mode === "all-ai") {
+      if (this.demoScheduler === "running" && !this.remainingWork) {
+        this.scheduleNextPump(0);
+      } else if (this.demoScheduler !== "running") {
+        this.suspendDeadline();
+      }
+      return;
+    }
     void this.enqueue(async () => {
       await this.driveAgents();
     });
   }
 
   private scheduleDeadline(actionWindowId: string, delayMs: number): void {
-    this.deadline?.handle.cancel();
-    const effectiveDelay =
-      this.config.mode === "all-ai" && this.demoAutoAdvance
-        ? Math.min(delayMs, Math.max(50, Math.floor(this.config.policy.demoStepDelayMs / this.demoSpeed)))
-        : delayMs;
-    const handle = this.config.clock.setTimeout(() => {
-      const commandId = `deadline:${this.config.matchId}:${actionWindowId}`;
-      void this.submitCommand({
-        commandId,
-        expectedRevision: this.state.revision,
-        seatId: null,
-        command: { kind: "deadline_reached", actionWindowId },
-        source: "system",
-      });
-    }, effectiveDelay);
+    this.deadline?.handle?.cancel();
+    const suspended = this.config.mode === "all-ai";
+    const handle = suspended
+      ? null
+      : this.config.clock.setTimeout(() => {
+          const commandId = `deadline:${this.config.matchId}:${actionWindowId}`;
+          void this.submitCommand({
+            commandId,
+            expectedRevision: this.state.revision,
+            seatId: null,
+            command: { kind: "deadline_reached", actionWindowId },
+            source: "system",
+          });
+        }, delayMs);
     this.deadline = {
       actionWindowId,
       handle,
-      deadlineAtMs: this.config.clock.now() + effectiveDelay,
+      deadlineAtMs: this.config.clock.now() + delayMs,
+      remainingMs: delayMs,
+      suspended,
     };
   }
 
@@ -390,12 +525,10 @@ export class RoomExecutor {
     return this.deadline?.deadlineAtMs ?? null;
   }
 
-  private async driveAgents(maxDecisions?: number): Promise<void> {
-    if (this.demoPaused && this.config.mode === "all-ai") return;
-    let decisions = 0;
+  private async driveAgents(): Promise<void> {
+    if (this.config.mode === "all-ai" && this.demoScheduler !== "running") return;
     for (const seat of this.config.seats) {
       if (this.state.phase.kind === "completed") return;
-      if (maxDecisions !== undefined && decisions >= maxDecisions) return;
       if (seat.kind !== "agent" || !seat.agent) continue;
       const window = this.state.window;
       if (this.state.phase.kind === "setup") {
@@ -412,7 +545,6 @@ export class RoomExecutor {
       if (this.agentInFlight.has(key)) continue;
       this.agentInFlight.add(key);
       try {
-        decisions++;
         await this.decideForAgent(seat);
       } finally {
         this.agentInFlight.delete(key);
@@ -423,29 +555,30 @@ export class RoomExecutor {
   private async decideForAgent(seat: SeatController): Promise<void> {
     const runtime = this.config.runtime;
     const agent = seat.agent!;
-    const revisionAtRequest = this.state.revision;
-    const observation = observeSeat(runtime, this.state, seat.seatId);
-    const { legalActions } = await import("@qiju/game-core");
-    const legal = legalActions(runtime, this.state, seat.seatId);
-
-    const decision = await agent.decide({
-      observation,
-      legalActions: legal,
-      context: {
-        matchId: this.config.matchId,
-        revision: revisionAtRequest,
-        seatId: seat.seatId,
-        ...(this.state.window ? { actionWindowId: this.state.window.actionWindowId } : {}),
-        ruleBundleId: runtime.manifest.ruleBundleId,
-        agentSeed: `${this.config.matchId}:${this.config.seed}`,
-        softTimeBudgetMs: this.config.policy.agentDecisionBudgetMs,
-      },
-    });
-
-    if (this.state.revision !== revisionAtRequest) {
-      return;
+    let decision: Awaited<ReturnType<Agent["decide"]>> | undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const revisionAtRequest = this.state.revision;
+      const observation = observeSeat(runtime, this.state, seat.seatId);
+      const { legalActions } = await import("@qiju/game-core");
+      const legal = legalActions(runtime, this.state, seat.seatId);
+      decision = await agent.decide({
+        observation,
+        legalActions: legal,
+        context: {
+          matchId: this.config.matchId,
+          revision: revisionAtRequest,
+          seatId: seat.seatId,
+          ...(this.state.window ? { actionWindowId: this.state.window.actionWindowId } : {}),
+          ruleBundleId: runtime.manifest.ruleBundleId,
+          agentSeed: `${this.config.matchId}:${this.config.seed}`,
+          softTimeBudgetMs: this.config.policy.agentDecisionBudgetMs,
+        },
+      });
+      if (this.state.revision === revisionAtRequest) break;
+      if (attempt === 1) return;
     }
-
+    if (!decision) return;
+    const revisionAtRequest = this.state.revision;
     const commandId = `agent:${this.config.matchId}:${seat.seatId}:${revisionAtRequest}:${decision.action.kind}`;
     const result = this.submitCommandInline({
       commandId,
@@ -468,15 +601,13 @@ export class RoomExecutor {
           softTimeBudgetMs: 0,
         },
       });
-      if (JSON.stringify(fallback.action) !== JSON.stringify(decision.action)) {
-        this.submitCommandInline({
-          commandId: `agent-fallback:${this.config.matchId}:${seat.seatId}:${this.state.revision}:${fallback.action.kind}`,
-          expectedRevision: this.state.revision,
-          seatId: seat.seatId,
-          command: fallback.action,
-          source: "system",
-        });
-      }
+      this.submitCommandInline({
+        commandId: `agent-fallback:${this.config.matchId}:${seat.seatId}:${this.state.revision}:${fallback.action.kind}`,
+        expectedRevision: this.state.revision,
+        seatId: seat.seatId,
+        command: fallback.action,
+        source: "system",
+      });
     }
   }
 
@@ -500,6 +631,12 @@ export class RoomExecutor {
 
   async kick(): Promise<void> {
     await this.enqueue(async () => {
+      if (this.config.mode === "all-ai") {
+        if (this.demoScheduler === "running") {
+          this.scheduleNextPump(0);
+        }
+        return;
+      }
       await this.driveAgents();
     });
   }
