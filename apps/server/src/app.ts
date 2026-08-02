@@ -88,7 +88,7 @@ function toGameCommand(payload: ClientCommand, seatId: SeatId): GameCommand {
   }
 }
 
-export async function buildApp(envOverrides?: Partial<AppEnv> & Record<string, string | number | boolean>): Promise<FastifyInstance> {
+export async function buildApp(envOverrides?: Record<string, string | number | boolean>): Promise<FastifyInstance> {
   const merged: Record<string, unknown> = { ...process.env, ...envOverrides };
   const env = envSchema.parse(merged);
   if (env.NODE_ENV === "production" && !env.COOKIE_SECRET) {
@@ -427,6 +427,21 @@ export async function buildApp(envOverrides?: Partial<AppEnv> & Record<string, s
               revision: room.revision,
               type: "demo_state",
               payload: room.demoState,
+            } satisfies ServerEnvelope),
+          );
+          ctx.serverSequence += 1;
+          socket.send(
+            JSON.stringify({
+              protocolVersion: PROTOCOL_VERSION,
+              serverSequence: ctx.serverSequence,
+              matchId,
+              revision: room.revision,
+              type: "snapshot",
+              payload: {
+                view: room.viewForPrincipal(principalId ?? "observer"),
+                deadlineAtMs: room.activeDeadlineAtMs,
+                demo: room.demoState,
+              },
             } satisfies ServerEnvelope),
           );
           return;

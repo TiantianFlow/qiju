@@ -104,6 +104,40 @@ describe("infallible layout", () => {
       }
     }
   }, 60_000);
+
+  it("100,000-seed corpus: no layout failure, all rectangular and non-overlapping", () => {
+    for (let i = 0; i < 100_000; i++) {
+      const state = createMatch({ matchId: `c${i}`, seed: `v2-100k-${i}`, runtime: runtimeV2 });
+      let current = state;
+      for (const seatId of SEAT_IDS) {
+        const r = transition(runtimeV2, current, {
+          kind: "select_loadout",
+          seatId,
+          analystId: "analyst.surveyor",
+          toolPackageId: "kit.survey",
+        });
+        if (r.kind !== "accepted") throw new Error(`select failed at seed ${i}`);
+        current = r.nextState;
+        const r2 = transition(runtimeV2, current, { kind: "lock_setup", seatId });
+        if (r2.kind !== "accepted") throw new Error(`lock failed at seed ${i}`);
+        current = r2.nextState;
+      }
+      const board = current.lot!.board!;
+      const occupied = new Uint8Array(board.width * board.height);
+      for (const p of board.placements) {
+        const xs = p.cells.map((c) => c.x);
+        const ys = p.cells.map((c) => c.y);
+        const w = Math.max(...xs) - Math.min(...xs) + 1;
+        const h = Math.max(...ys) - Math.min(...ys) + 1;
+        if (p.cells.length !== w * h) throw new Error(`non-rect placement at seed ${i}`);
+        for (const c of p.cells) {
+          const key = c.y * board.width + c.x;
+          if (occupied[key]) throw new Error(`overlap at seed ${i}`);
+          occupied[key] = 1;
+        }
+      }
+    }
+  }, 300_000);
 });
 
 describe("v2 secrecy", () => {
