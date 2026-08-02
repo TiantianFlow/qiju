@@ -118,6 +118,11 @@ interface PendingDeadline {
 
 type DemoSchedulerState = "running" | "paused" | "stepping";
 
+interface StagedPresentationFrame {
+  kind: PresentationCheckpointKind;
+  view: PublicView;
+}
+
 export class RoomExecutor {
   private state: MatchState;
   private readonly config: RoomConfig;
@@ -126,11 +131,17 @@ export class RoomExecutor {
   private queue: Promise<unknown> = Promise.resolve();
   private agentInFlight = new Set<string>();
   private readonly allEvents: DomainEvent[] = [];
-  private demoScheduler: DemoSchedulerState = "running";
+  private demoScheduler: DemoSchedulerState = "paused";
   private demoSpeed = 1;
   private pumpTimer: ClockTimerHandle | null = null;
   private presentationSeq = 0;
   private presentationCheckpoint: PresentationCheckpoint | null = null;
+  /** Queued player-visible frames waiting to be published one-per-Step/pump tick. */
+  private presentationQueue: StagedPresentationFrame[] = [];
+  /** Last published observer view (may lag authoritative completed state). */
+  private publishedPublicView: PublicView | null = null;
+  /** When true, afterAccepted does not broadcast intermediate snapshots. */
+  private suppressViewPublish = false;
 
   constructor(config: RoomConfig) {
     this.config = config;
@@ -215,7 +226,7 @@ export class RoomExecutor {
 
   viewForPrincipal(principalId: string): PublicView | SeatObservation | null {
     if (this.config.mode === "all-ai") {
-      return observePublic(this.config.runtime, this.state);
+      return this.publicView();
     }
     const seatId = this.seatIdForPrincipal(principalId);
     if (!seatId) return null;
@@ -223,6 +234,9 @@ export class RoomExecutor {
   }
 
   publicView(): PublicView {
+    if (this.config.mode === "all-ai" && this.publishedPublicView) {
+      return this.publishedPublicView;
+    }
     return observePublic(this.config.runtime, this.state);
   }
 
@@ -248,7 +262,12 @@ export class RoomExecutor {
     this.demoSpeed = Math.max(1, Math.min(8, speed));
   }
 
-  private computeCheckpoint(): PresentationCheckpointKind {
+  /**
+   * Live checkpoint implied by authoritative state alone.
+   * Settlement can collapse several player-visible stages into one transition;
+   * staging (enqueuePresentationFromEvents) expands those for the UI.
+   */
+  private computeLiveCheckpoint(): PresentationCheckpointKind {
     const state = this.state;
     if (state.phase.kind === "completed") return "completed";
     if (state.phase.kind === "setup") return "setup-progress";
@@ -270,6 +289,136 @@ export class RoomExecutor {
     return "round-outcome";
   }
 
+  /** Project a player-visible frame; may mask completed phase until that frame is due. */
+  private projectPresentationView(kind: PresentationCheckpointKind): PublicView {
+    const base = observePublic(this.config.runtime, this.state);
+    if (kind === "completed") return base;
+    if (base.phase !== "completed") return base;
+    const { result: _result, ...rest } = base;
+    return {
+      ...rest,
+      phase: "auction",
+    };
+  }
+
+  private enqueueKinds(kinds: PresentationCheckpointKind[]): void {
+    for (const kind of kinds) {
+      const lastQueued = this.presentationQueue[this.presentationQueue.length - 1]?.kind;
+      const lastPublished = this.presentationCheckpoint?.kind;
+      if (kind === lastQueued || (this.presentationQueue.length === 0 && kind === lastPublished)) {
+        continue;
+      }
+      this.presentationQueue.push({ kind, view: this.projectPresentationView(kind) });
+    }
+  }
+
+  /**
+   * When a core transition reveals/settles, stage every skipped player-visible frame.
+   * Otherwise enqueue a single live checkpoint change.
+   */
+  private enqueuePresentationFromEvents(
+    beforeKind: PresentationCheckpointKind | null,
+    newEvents: readonly DomainEvent[],
+  ): void {
+    const revealed = newEvents.some((e) => e.type === "bids.revealed");
+    if (revealed) {
+      const lastReveal = this.state.reveals[this.state.reveals.length - 1];
+      const staged: PresentationCheckpointKind[] = [];
+      if (
+        beforeKind === "auction-ready" ||
+        beforeKind === "round-intel" ||
+        beforeKind === "bids-progress" ||
+        beforeKind === "setup-progress"
+      ) {
+        staged.push("bids-ready");
+      }
+      staged.push("bids-revealed");
+      if (!lastReveal) {
+        this.enqueueKinds(staged);
+        return;
+      }
+      if (lastReveal.outcome === "sold" || lastReveal.outcome === "no_sale") {
+        staged.push("round-outcome");
+        staged.push("completed");
+      } else if (lastReveal.outcome === "continue" || lastReveal.outcome === "tiebreak") {
+        const next = this.computeLiveCheckpoint();
+        if (next !== "bids-revealed" && next !== "completed") {
+          staged.push(next);
+        }
+      }
+      this.enqueueKinds(staged);
+      return;
+    }
+
+    const live = this.computeLiveCheckpoint();
+    if (live !== beforeKind) {
+      this.enqueueKinds([live]);
+    }
+  }
+
+  private publishPresentationFrame(frame: StagedPresentationFrame): PresentationCheckpoint {
+    this.presentationSeq += 1;
+    this.presentationCheckpoint = { seq: this.presentationSeq, kind: frame.kind };
+    this.publishedPublicView = frame.view;
+    this.publishViews();
+    return this.presentationCheckpoint;
+  }
+
+  private advanceOnePresentationFrame(): {
+    changed: boolean;
+    revision: number;
+    checkpoint: PresentationCheckpoint | null;
+  } {
+    const frame = this.presentationQueue.shift();
+    if (!frame) {
+      return { changed: false, revision: this.state.revision, checkpoint: this.presentationCheckpoint };
+    }
+    const checkpoint = this.publishPresentationFrame(frame);
+    return { changed: true, revision: this.state.revision, checkpoint };
+  }
+
+  /**
+   * Consume internal actions (with publish suppressed) until at least one
+   * presentation frame is queued, then publish exactly one frame.
+   */
+  private async prepareAndAdvancePresentationFrame(): Promise<{
+    changed: boolean;
+    revision: number;
+    checkpoint: PresentationCheckpoint | null;
+  }> {
+    if (this.presentationCheckpoint?.kind === "completed" && this.presentationQueue.length === 0) {
+      return { changed: false, revision: this.state.revision, checkpoint: this.presentationCheckpoint };
+    }
+    if (this.presentationQueue.length > 0) {
+      return this.advanceOnePresentationFrame();
+    }
+
+    const beforeKind = this.presentationCheckpoint?.kind ?? null;
+    this.suppressViewPublish = true;
+    try {
+      for (let i = 0; i < RoomExecutor.MAX_STEP_ACTIONS; i++) {
+        const eventsBefore = this.allEvents.length;
+        const progressed = await this.performOneSessionAction();
+        const newEvents = this.allEvents.slice(eventsBefore);
+        this.enqueuePresentationFromEvents(beforeKind, newEvents);
+        if (this.presentationQueue.length > 0) break;
+        if (!progressed) {
+          if (this.state.phase.kind === "completed" && beforeKind !== "completed") {
+            this.enqueueKinds(["completed"]);
+          }
+          break;
+        }
+      }
+    } finally {
+      this.suppressViewPublish = false;
+    }
+
+    if (this.presentationQueue.length === 0) {
+      return { changed: false, revision: this.state.revision, checkpoint: this.presentationCheckpoint };
+    }
+    return this.advanceOnePresentationFrame();
+  }
+
   private static readonly MAX_STEP_ACTIONS = 64;
 
   async demoStep(): Promise<{ changed: boolean; revision: number; checkpoint: PresentationCheckpoint | null }> {
@@ -277,37 +426,18 @@ export class RoomExecutor {
       return { changed: false, revision: this.state.revision, checkpoint: this.presentationCheckpoint };
     }
     return this.enqueue(async () => {
-      if (this.isCompleted && this.presentationCheckpoint?.kind === "completed") {
+      if (this.presentationCheckpoint?.kind === "completed" && this.presentationQueue.length === 0) {
         return { changed: false, revision: this.state.revision, checkpoint: this.presentationCheckpoint };
       }
-      const beforeKind = this.presentationCheckpoint?.kind ?? null;
       this.demoScheduler = "stepping";
       try {
-        for (let i = 0; i < RoomExecutor.MAX_STEP_ACTIONS; i++) {
-          const progressed = await this.performOneSessionAction();
-          const kind = this.computeCheckpoint();
-          if (kind !== beforeKind) {
-            this.presentationSeq += 1;
-            this.presentationCheckpoint = { seq: this.presentationSeq, kind };
-            break;
-          }
-          if (!progressed || this.isCompleted) {
-            if (this.isCompleted && this.presentationCheckpoint?.kind !== "completed") {
-              this.presentationSeq += 1;
-              this.presentationCheckpoint = { seq: this.presentationSeq, kind: "completed" };
-            }
-            break;
-          }
-        }
+        const result = await this.prepareAndAdvancePresentationFrame();
+        return result;
       } finally {
         this.demoScheduler = "paused";
+        this.cancelPump();
+        this.suspendDeadline();
       }
-      this.cancelPump();
-      this.suspendDeadline();
-      const changed =
-        this.presentationCheckpoint?.kind !== beforeKind &&
-        this.presentationCheckpoint !== null;
-      return { changed, revision: this.state.revision, checkpoint: this.presentationCheckpoint };
     });
   }
 
@@ -320,7 +450,9 @@ export class RoomExecutor {
     if (this.config.mode !== "all-ai") return;
     if (this.demoScheduler !== "running") return;
     this.cancelPump();
-    if (this.isCompleted) return;
+    const presentationDone =
+      this.presentationCheckpoint?.kind === "completed" && this.presentationQueue.length === 0;
+    if (presentationDone) return;
     const clamped = Math.max(0, delayMs);
     this.pumpTimer = this.config.clock.setTimeout(() => {
       this.pumpTimer = null;
@@ -348,31 +480,15 @@ export class RoomExecutor {
   }
 
   private async pumpOnce(): Promise<void> {
-    if (this.demoScheduler !== "running" || this.isCompleted) {
-      if (this.isCompleted && this.presentationCheckpoint?.kind !== "completed") {
-        this.presentationSeq += 1;
-        this.presentationCheckpoint = { seq: this.presentationSeq, kind: "completed" };
-      }
+    if (this.demoScheduler !== "running") return;
+    if (this.presentationCheckpoint?.kind === "completed" && this.presentationQueue.length === 0) {
       return;
     }
-    const beforeKind = this.presentationCheckpoint?.kind ?? null;
-    for (let i = 0; i < RoomExecutor.MAX_STEP_ACTIONS; i++) {
-      const progressed = await this.performOneSessionAction();
-      const kind = this.computeCheckpoint();
-      if (kind !== beforeKind) {
-        this.presentationSeq += 1;
-        this.presentationCheckpoint = { seq: this.presentationSeq, kind };
-        break;
-      }
-      if (!progressed || this.isCompleted) {
-        if (this.isCompleted && this.presentationCheckpoint?.kind !== "completed") {
-          this.presentationSeq += 1;
-          this.presentationCheckpoint = { seq: this.presentationSeq, kind: "completed" };
-        }
-        break;
-      }
+    await this.prepareAndAdvancePresentationFrame();
+    if (this.demoScheduler !== "running") return;
+    if (this.presentationCheckpoint?.kind === "completed" && this.presentationQueue.length === 0) {
+      return;
     }
-    if (this.demoScheduler !== "running" || this.isCompleted) return;
     const base = this.config.policy.demoStepDelayMs;
     this.scheduleNextPump(Math.max(50, Math.floor(base / this.demoSpeed)));
   }
@@ -570,7 +686,12 @@ export class RoomExecutor {
       }
     }
     if (this.config.mode === "all-ai") {
-      if (this.demoScheduler === "running" && !this.remainingWork) {
+      if (
+        this.demoScheduler === "running" &&
+        !this.suppressViewPublish &&
+        !this.remainingWork &&
+        this.presentationQueue.length === 0
+      ) {
         this.scheduleNextPump(0);
       } else if (this.demoScheduler !== "running") {
         this.suspendDeadline();
@@ -698,6 +819,7 @@ export class RoomExecutor {
   }
 
   private publishViews(): void {
+    if (this.suppressViewPublish) return;
     if (this.config.mode === "all-ai") {
       this.config.events.onViewUpdate({ kind: "public", view: this.publicView() }, this.state.revision);
       return;
@@ -731,20 +853,27 @@ export class RoomExecutor {
     if (this.config.mode !== "all-ai") return;
     return this.enqueue(async () => {
       if (this.state.phase.kind !== "setup") return;
-      for (const seat of this.config.seats) {
-        if (seat.kind !== "agent" || !seat.agent) continue;
-        const seatState = this.state.seats.find((s) => s.seatId === seat.seatId)!;
-        if (seatState.setupLocked) continue;
-        await this.decideForAgent(seat);
-        const after = this.state.seats.find((s) => s.seatId === seat.seatId)!;
-        if (after.analystId && !after.setupLocked) {
+      this.suppressViewPublish = true;
+      try {
+        for (const seat of this.config.seats) {
+          if (seat.kind !== "agent" || !seat.agent) continue;
+          const seatState = this.state.seats.find((s) => s.seatId === seat.seatId)!;
+          if (seatState.setupLocked) continue;
           await this.decideForAgent(seat);
+          const after = this.state.seats.find((s) => s.seatId === seat.seatId)!;
+          if (after.analystId && !after.setupLocked) {
+            await this.decideForAgent(seat);
+          }
         }
+      } finally {
+        this.suppressViewPublish = false;
       }
       if (this.state.phase.kind !== "setup") {
         this.presentationSeq += 1;
         this.presentationCheckpoint = { seq: this.presentationSeq, kind: "auction-ready" };
+        this.publishedPublicView = this.projectPresentationView("auction-ready");
         this.suspendDeadline();
+        this.publishViews();
       }
     });
   }

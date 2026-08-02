@@ -66,14 +66,14 @@ describe("session integration: demo lifecycle on v2", () => {
       await room.initializeDemoToAuctionReady();
       if (mode === "step") {
         let guard = 0;
-        while (!(room.isCompleted && room.demoState.presentation?.kind === "completed") && guard++ < 60) {
+        while (!(room.isCompleted && room.demoState.presentation?.kind === "completed") && guard++ < 200) {
           await room.demoStep();
         }
       } else {
         room.setDemoSpeed(mode === "s1" ? 1 : 8);
         room.setDemoPaused(false);
         let guard = 0;
-        while (!room.isCompleted && guard++ < 500) {
+        while (!(room.isCompleted && room.demoState.presentation?.kind === "completed") && guard++ < 2000) {
           clock.advanceBy(5_000);
           await room.kick();
         }

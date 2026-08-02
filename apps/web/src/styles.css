@@ -171,6 +171,23 @@ button.link {
   margin: 12px 0;
 }
 
+.auction-board {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: 12px 0;
+}
+
+.auction-board .lot-board-wrap,
+[data-testid="result-board"] .lot-board-wrap {
+  width: 100%;
+}
+
+.auction-board .lot-board,
+[data-testid="result-board"] .lot-board {
+  width: min(100%, 480px);
+}
+
 .slot-card {
   background: var(--panel);
   border: 1px solid #2a3549;
@@ -503,4 +520,23 @@ button.link {
   text-align: left;
   cursor: pointer;
   text-decoration: underline dotted;
+}
+
+.event-targets {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.event-target-focus {
+  background: var(--panel);
+  border: 1px solid #2a3549;
+  color: var(--accent-2, #7cc7ff);
+  border-radius: 4px;
+  min-width: 1.5rem;
+  padding: 0 4px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
 }

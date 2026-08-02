@@ -26,6 +26,10 @@ export class RoomManager {
     return this.rooms.get(matchId);
   }
 
+  delete(matchId: string): void {
+    this.rooms.delete(matchId);
+  }
+
   createHumanVsAi(input: {
     matchId: string;
     seed: string;
@@ -49,10 +53,14 @@ export class RoomManager {
       kind: "agent",
       agent,
     }));
-    const room = this.create(input, seats, "all-ai");
-    if (input.startPaused !== false) {
-      room.setDemoPaused(true);
-    }
+    const room = this.create(input, seats, "all-ai", { deferKick: true });
+    room.setDemoPaused(true);
+    void (async () => {
+      await room.initializeDemoToAuctionReady();
+      if (input.startPaused === false) {
+        room.setDemoPaused(false);
+      }
+    })();
     return room;
   }
 
@@ -60,6 +68,7 @@ export class RoomManager {
     input: { matchId: string; seed: string; events: RoomEvents },
     seats: SeatController[],
     mode: "human-vs-ai" | "all-ai",
+    options?: { deferKick?: boolean },
   ): RoomExecutor {
     const existing = this.rooms.get(input.matchId);
     if (existing) return existing;
@@ -74,9 +83,13 @@ export class RoomManager {
       mode,
     });
     this.rooms.set(input.matchId, room);
-    if (mode === "all-ai") {
-      void room.initializeDemoToAuctionReady();
-    } else {
+    if (!options?.deferKick) {
+      if (mode === "all-ai") {
+        void room.initializeDemoToAuctionReady();
+      } else {
+        void room.kick();
+      }
+    } else if (mode !== "all-ai") {
       void room.kick();
     }
     return room;

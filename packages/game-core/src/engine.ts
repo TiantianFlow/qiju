@@ -1490,14 +1490,17 @@ function projectBoard(
 
     const shapeKnown = fields.shape !== undefined || fields.identity !== undefined;
     const tierKnown = fields.tier !== undefined || fields.identity !== undefined;
+    const categoryKnown = fields.category !== undefined || fields.identity !== undefined;
     const identityKnown = fields.identity !== undefined;
     const valueKnown = fields.value !== undefined || fields.identity !== undefined;
-    const anyKnown = shapeKnown || tierKnown || identityKnown || valueKnown;
+    const anyKnown = shapeKnown || tierKnown || categoryKnown || identityKnown || valueKnown;
     if (!anyKnown) continue;
 
     const revealed: RevealedObjectView = {
       revealId: state.revealTokenBySlot?.[slot.slotId] ?? `obj.${slot.slotId}`,
-      ...(tierKnown ? { anchor: placement.anchor } : {}),
+      ...((tierKnown || categoryKnown || valueKnown || identityKnown || shapeKnown)
+        ? { anchor: placement.anchor }
+        : {}),
       ...(shapeKnown ? { cells: placement.cells } : {}),
       ...(fields.tier !== undefined ? { tier: fields.tier as TierId } : {}),
       ...(fields.category !== undefined ? { category: fields.category as CategoryId } : {}),

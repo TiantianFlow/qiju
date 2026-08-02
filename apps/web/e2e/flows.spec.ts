@@ -1,4 +1,29 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+
+async function openSeededDemo(page: Page, seed: string) {
+  await page.goto("/");
+  await page.getByRole("button", { name: "种子（可选，用于复现）" }).click();
+  await page.getByTestId("seed-input").fill(seed);
+  await page.getByTestId("watch-demo").click();
+  await expect(page.getByTestId("demo-controls")).toBeVisible({ timeout: 15_000 });
+}
+
+async function openSeededHuman(page: Page, seed: string) {
+  await page.goto("/");
+  await page.getByRole("button", { name: "种子（可选，用于复现）" }).click();
+  await page.getByTestId("seed-input").fill(seed);
+  await page.getByTestId("play-vs-ai").click();
+  await expect(page.getByTestId("lock-setup")).toBeVisible({ timeout: 15_000 });
+}
+
+async function submitAndLockBid(page: Page, amount: string) {
+  const bidInput = page.getByTestId("bid-input");
+  await expect(bidInput).toBeVisible({ timeout: 20_000 });
+  await bidInput.fill(amount);
+  await page.getByTestId("submit-bid").click();
+  await expect(page.getByTestId("lock-bid")).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("lock-bid").click();
+}
 
 test.describe("home page", () => {
   test("shows zh-CN by default and can switch to English", async ({ page }) => {
@@ -20,34 +45,25 @@ test.describe("home page", () => {
 });
 
 test.describe("human vs AI match", () => {
-  test("complete a full match from home to result", async ({ page }) => {
-    test.setTimeout(600_000);
-    await page.goto("/");
-    await page.getByTestId("play-vs-ai").click();
-
-    await expect(page.getByTestId("lock-setup")).toBeVisible({ timeout: 15_000 });
+  test("complete a full sold match from home to result with fixed seed", async ({ page }) => {
+    test.setTimeout(180_000);
+    await openSeededHuman(page, "accept-sold");
     await page.getByTestId("analyst-analyst.appraiser").click();
     await page.getByTestId("kit-kit.appraisal").click();
     await page.getByTestId("lock-setup").click();
 
-    for (let round = 0; round < 7; round++) {
-      const resultVisible = await page
-        .getByTestId("restart")
-        .isVisible()
-        .catch(() => false);
-      if (resultVisible) break;
-
+    for (let round = 0; round < 8; round++) {
+      if (await page.getByTestId("restart").isVisible().catch(() => false)) break;
       const bidInput = page.getByTestId("bid-input");
-      const canBid = await bidInput.isVisible().catch(() => false);
-      if (canBid) {
-        await bidInput.fill("0");
-        await page.getByTestId("submit-bid").click();
+      if (!(await bidInput.isVisible().catch(() => false))) {
+        await expect
+          .poll(async () => (await page.getByTestId("restart").isVisible().catch(() => false)) || (await bidInput.isVisible().catch(() => false)), {
+            timeout: 30_000,
+          })
+          .toBeTruthy();
       }
-      const lockButton = page.getByTestId("lock-bid");
-      const canLock = await lockButton.isVisible().catch(() => false);
-      if (canLock) {
-        await lockButton.click();
-      }
+      if (await page.getByTestId("restart").isVisible().catch(() => false)) break;
+      await submitAndLockBid(page, "0");
       const heading = page.locator(".table-head h2");
       const before = (await heading.textContent().catch(() => "")) ?? "";
       await expect
@@ -56,21 +72,34 @@ test.describe("human vs AI match", () => {
             if (await page.getByTestId("restart").isVisible().catch(() => false)) return "done";
             return (await heading.textContent().catch(() => "")) ?? "";
           },
-          { timeout: 140_000 },
+          { timeout: 45_000 },
         )
         .not.toBe(before);
     }
 
     await expect(page.getByTestId("restart")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("result-board")).toBeVisible();
     await page.getByTestId("restart").click();
     await expect(page.getByTestId("play-vs-ai")).toBeVisible();
   });
 
+  test("no-sale demo seed reaches inspectable result board", async ({ page }) => {
+    test.setTimeout(180_000);
+    await openSeededDemo(page, "srvns-6718");
+    await page.getByTestId("demo-speed").selectOption("8");
+    await page.getByTestId("demo-resume").click();
+    await expect(page.getByTestId("restart")).toBeVisible({ timeout: 120_000 });
+    await expect(page.getByTestId("result-nosale")).toBeVisible();
+    await expect(page.getByTestId("result-board")).toBeVisible();
+    const cards = page.getByTestId("result-board").locator(".object-card");
+    expect(await cards.count()).toBeGreaterThanOrEqual(8);
+    await cards.first().click();
+    await expect(page.getByTestId("object-detail")).toBeVisible();
+  });
+
   test("human round timer starts near 120 seconds and counts down without jumping back", async ({ page }) => {
     test.setTimeout(60_000);
-    await page.goto("/");
-    await page.getByTestId("play-vs-ai").click();
-    await expect(page.getByTestId("lock-setup")).toBeVisible({ timeout: 15_000 });
+    await openSeededHuman(page, "timer-seed-1");
     await page.getByTestId("analyst-analyst.appraiser").click();
     await page.getByTestId("kit-kit.appraisal").click();
     await page.getByTestId("lock-setup").click();
@@ -89,9 +118,7 @@ test.describe("human vs AI match", () => {
 
   test("deadline survives reload and the server closes the window at 120s", async ({ page }) => {
     test.setTimeout(200_000);
-    await page.goto("/");
-    await page.getByTestId("play-vs-ai").click();
-    await expect(page.getByTestId("lock-setup")).toBeVisible({ timeout: 15_000 });
+    await openSeededHuman(page, "timer-seed-2");
     await page.getByTestId("analyst-analyst.appraiser").click();
     await page.getByTestId("kit-kit.appraisal").click();
     await page.getByTestId("lock-setup").click();
@@ -121,13 +148,8 @@ test.describe("human vs AI match", () => {
 test.describe("all-AI demo", () => {
   test("demo runs with controls and fixed seed", async ({ page }) => {
     test.setTimeout(180_000);
-    await page.goto("/");
-    await page.getByTestId("seed-input").isHidden();
-    await page.getByRole("button", { name: "种子（可选，用于复现）" }).click();
-    await page.getByTestId("seed-input").fill("e2e-demo-seed");
-    await page.getByTestId("watch-demo").click();
+    await openSeededDemo(page, "e2e-demo-seed");
 
-    await expect(page.getByTestId("demo-controls")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId("presentation")).toBeVisible({ timeout: 15_000 });
     const presentationText = async () => (await page.getByTestId("presentation").textContent()) ?? "";
     const mainHtml = await page.locator("main").innerHTML();
@@ -149,11 +171,7 @@ test.describe("all-AI demo", () => {
   test("board does not leak item count and stays a grid on mobile", async ({ page }) => {
     test.setTimeout(120_000);
     await page.setViewportSize({ width: 360, height: 720 });
-    await page.goto("/");
-    await page.getByRole("button", { name: "种子（可选，用于复现）" }).click();
-    await page.getByTestId("seed-input").fill("board-seed-mobile");
-    await page.getByTestId("watch-demo").click();
-    await expect(page.getByTestId("demo-controls")).toBeVisible({ timeout: 15_000 });
+    await openSeededDemo(page, "board-seed-mobile");
 
     for (let i = 0; i < 6; i++) {
       const stepButton = page.getByTestId("demo-step");
@@ -168,6 +186,9 @@ test.describe("all-AI demo", () => {
     await expect(board).toBeVisible();
     const display = await board.evaluate((el) => getComputedStyle(el).display);
     expect(display).toBe("grid");
+    const boardBox = await board.boundingBox();
+    expect(boardBox).not.toBeNull();
+    expect(boardBox!.width).toBeGreaterThan(200);
 
     const backgroundCells = await board.locator(".board-cell.concealed").all();
     expect(backgroundCells.length).toBe(100);
@@ -192,14 +213,17 @@ test.describe("all-AI demo", () => {
   test("revealed objects are single spanning object-cards without leaks", async ({ page }) => {
     test.setTimeout(120_000);
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto("/");
-    await page.getByTestId("play-vs-ai").click();
-    await expect(page.getByTestId("lock-setup")).toBeVisible({ timeout: 15_000 });
+    await openSeededHuman(page, "object-card-seed");
     await page.getByTestId("analyst-analyst.surveyor").click();
     await page.getByTestId("kit-kit.survey").click();
     await page.getByTestId("lock-setup").click();
 
     await expect(page.locator(".object-card").first()).toBeVisible({ timeout: 20_000 });
+    const auctionBoard = page.getByTestId("auction-board");
+    await expect(auctionBoard).toBeVisible();
+    const boardBox = await page.getByTestId("lot-board").boundingBox();
+    expect(boardBox).not.toBeNull();
+    expect(boardBox!.width).toBeGreaterThan(300);
 
     const cards = page.locator(".object-card");
     const count = await cards.count();
@@ -207,37 +231,37 @@ test.describe("all-AI demo", () => {
 
     for (let i = 0; i < count; i++) {
       const card = cards.nth(i);
-      const ariaCount = await card.count();
-      expect(ariaCount).toBe(1);
+      expect(await card.count()).toBe(1);
       const w = await card.getAttribute("data-width");
       const h = await card.getAttribute("data-height");
-      if (w && h && Number(w) * Number(h) > 1) {
-        const box = await card.boundingBox();
-        expect(box).not.toBeNull();
-        expect(box!.width).toBeGreaterThan(20);
-        expect(box!.height).toBeGreaterThan(20);
+      if (w && h) {
+        const colSpan = await card.evaluate((el) => getComputedStyle(el).gridColumnEnd);
+        const rowSpan = await card.evaluate((el) => getComputedStyle(el).gridRowEnd);
+        expect(colSpan).toContain(`span ${w}`);
+        expect(rowSpan).toContain(`span ${h}`);
       }
     }
 
     const first = cards.first();
     await first.click();
     await expect(page.getByTestId("object-detail")).toBeVisible();
+    await page.getByTestId("object-detail").getByRole("button").click();
+    await expect(first).toBeFocused();
 
     await page.setViewportSize({ width: 360, height: 720 });
     await expect(page.getByTestId("lot-board")).toBeVisible();
-    const display = await page.getByTestId("lot-board").evaluate((el) => getComputedStyle(el).display);
-    expect(display).toBe("grid");
+    const mobileBox = await page.getByTestId("lot-board").boundingBox();
+    expect(mobileBox).not.toBeNull();
+    expect(mobileBox!.width).toBeGreaterThan(200);
+    await cards.first().click();
+    await expect(page.getByTestId("object-detail")).toBeVisible();
   });
 });
 
 test.describe("result page", () => {
   test("completed demo shows full lot board and inspects multiple object sizes", async ({ page }) => {
     test.setTimeout(180_000);
-    await page.goto("/");
-    await page.getByRole("button", { name: "种子（可选，用于复现）" }).click();
-    await page.getByTestId("seed-input").fill("result-board-seed");
-    await page.getByTestId("watch-demo").click();
-    await expect(page.getByTestId("demo-controls")).toBeVisible({ timeout: 15_000 });
+    await openSeededDemo(page, "result-board-seed");
     await page.getByTestId("demo-speed").selectOption("8");
     await page.getByTestId("demo-resume").click();
     await expect(page.getByTestId("restart")).toBeVisible({ timeout: 120_000 });
@@ -276,5 +300,24 @@ test.describe("result page", () => {
 
     const mainHtml = await page.locator("main").innerHTML();
     expect(mainHtml).not.toMatch(/S0\d/);
+  });
+
+  test("360px result board and economic table remain usable", async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 360, height: 720 });
+    await openSeededDemo(page, "result-board-seed");
+    await page.getByTestId("demo-speed").selectOption("8");
+    await page.getByTestId("demo-resume").click();
+    await expect(page.getByTestId("restart")).toBeVisible({ timeout: 120_000 });
+    await expect(page.getByTestId("result-board")).toBeVisible();
+    const boardBox = await page.getByTestId("lot-board").boundingBox();
+    expect(boardBox).not.toBeNull();
+    expect(boardBox!.width).toBeGreaterThan(200);
+    await page.getByTestId("result-board").locator(".object-card").first().click();
+    await expect(page.getByTestId("object-detail")).toBeVisible();
+    await expect(page.getByTestId("result-seat1")).toBeVisible();
+    const tableBox = await page.locator(".result table").first().boundingBox();
+    expect(tableBox).not.toBeNull();
+    expect(tableBox!.width).toBeGreaterThan(150);
   });
 });

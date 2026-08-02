@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "test:integration": "vitest run -c vitest.integration.config.ts --passWithNoTests",
+    "test:integration": "vitest run -c vitest.integration.config.ts",
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js"
   },

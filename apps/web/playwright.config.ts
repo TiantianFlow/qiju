@@ -3,7 +3,7 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "e2e",
   timeout: 90_000,
-  retries: 1,
+  retries: 0,
   workers: 1,
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
@@ -14,7 +14,7 @@ export default defineConfig({
     : {
         command: "node ../server/dist/main.js",
         url: "http://localhost:3000/health/live",
-        reuseExistingServer: true,
+        reuseExistingServer: false,
         timeout: 30_000,
         env: { PORT: "3000", LOG_LEVEL: "warn" },
       },

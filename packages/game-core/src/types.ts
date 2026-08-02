@@ -30,7 +30,21 @@ export type ShapeId =
   | "corner3"
   | "square4"
   | "corner4"
-  | "rect6";
+  | "rect6"
+  | `rect.${number}x${number}`;
+
+/** Deterministic rectangular shape key for v2 footprints (never overloaded onto `single`). */
+export function rectangularShapeId(width: number, height: number): `rect.${number}x${number}` {
+  return `rect.${width}x${height}`;
+}
+
+export function parseRectangularShapeId(
+  shapeId: string,
+): { width: number; height: number } | null {
+  const m = /^rect\.(\d+)x(\d+)$/.exec(shapeId);
+  if (!m) return null;
+  return { width: Number(m[1]), height: Number(m[2]) };
+}
 
 export type ItemId = `syn.${CategoryId}.${TierId}`;
 export type SlotId = `S${string}`;

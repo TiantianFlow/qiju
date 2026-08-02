@@ -6,6 +6,13 @@ import { SlotCard } from "../components/SlotCard";
 import { LotBoardView } from "../components/LotBoard";
 import { useCountdown } from "../hooks";
 
+function formatShapeId(shapeId: string | undefined): string {
+  if (!shapeId) return "?";
+  const rect = /^rect\.(\d+)x(\d+)$/.exec(shapeId);
+  if (rect) return `${rect[1]} × ${rect[2]}`;
+  return shapeId;
+}
+
 function formatEventDescription(strings: Strings, event: PublicEvent): string {
   const params: Record<string, string | number> = { ...event.params };
   if (typeof params.tier === "string") params.tier = t(strings, `tier.${params.tier}`);
@@ -38,9 +45,23 @@ function EventFeed({
             <span className="event-round">R{event.round}</span>
             <span className="event-source">{t(strings, `event.source.${event.sourceKind}`)}</span>
             {event.revealIds.length > 0 ? (
-              <button className="event-link" onClick={() => onFocusObject(event.revealIds[0]!)}>
-                {formatEventDescription(strings, event)}
-              </button>
+              <span className="event-targets">
+                <button className="event-link" onClick={() => onFocusObject(event.revealIds[0]!)}>
+                  {formatEventDescription(strings, event)}
+                </button>
+                {event.revealIds.length > 1
+                  ? event.revealIds.map((id, index) => (
+                      <button
+                        key={id}
+                        className="event-target-focus"
+                        data-testid={`event-focus-${event.id}-${index}`}
+                        onClick={() => onFocusObject(id)}
+                      >
+                        {index + 1}
+                      </button>
+                    ))
+                  : null}
+              </span>
             ) : (
               <span className="event-text">{formatEventDescription(strings, event)}</span>
             )}
@@ -103,7 +124,7 @@ function describeIntel(strings: Strings, record: IntelRecordView, hideSlotId: bo
     case "category":
       return `${slot}: ${t(strings, "intel.field.category")} = ${t(strings, `category.${fact.category}`)}`;
     case "shape":
-      return `${slot}: ${t(strings, "intel.field.shape")} = ${fact.shapeId}`;
+      return `${slot}: ${t(strings, "intel.field.shape")} = ${formatShapeId(fact.shapeId)}`;
     case "identity":
       return `${slot}: ${t(strings, `item.${fact.itemId}.name`)}`;
     case "value":
@@ -178,18 +199,22 @@ export function TablePage({
         </p>
       ) : null}
 
-      <section className="slots-grid">
-        {view.board ? (
+      {view.board ? (
+        <section className="auction-board" data-testid="auction-board">
           <LotBoardView
             strings={strings}
             board={view.board}
             focusRevealId={focusRevealId}
             onFocusHandled={() => setFocusRevealId(undefined)}
           />
-        ) : (
-          view.slots.map((slot) => <SlotCard key={slot.slotId} strings={strings} slot={slot} />)
-        )}
-      </section>
+        </section>
+      ) : (
+        <section className="slots-grid">
+          {view.slots.map((slot) => (
+            <SlotCard key={slot.slotId} strings={strings} slot={slot} />
+          ))}
+        </section>
+      )}
 
       <div className="table-columns">
         <div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compileDemoV0 } from "@qiju/rules-demo";
+import { compileDemoV0, compileDemoV2 } from "@qiju/rules-demo";
 import { type PublicView, type SeatObservation } from "@qiju/game-core";
 import { balancedCalculatorAgent, BUILTIN_AGENTS } from "@qiju/agents";
 import {
@@ -10,6 +10,7 @@ import {
 } from "@qiju/session-runtime";
 
 const runtime = compileDemoV0();
+const runtimeV2 = compileDemoV2();
 
 async function submitHuman(
   room: {
@@ -251,7 +252,7 @@ describe("session runtime (in-memory, FakeClock)", () => {
 
   function createDemoManager(clock: FakeClock) {
     return new RoomManager({
-      runtime,
+      runtime: runtimeV2,
       clock,
       agentPool: {
         humanVsAiAgents: () => BUILTIN_AGENTS.slice(0, 4) as never,
@@ -299,6 +300,66 @@ describe("session runtime (in-memory, FakeClock)", () => {
     expect(room.demoState.paused).toBe(true);
     clock.advanceBy(120_000);
     expect(room.demoState.presentation?.seq).toBe(initialSeq + 2);
+  });
+
+  it("round-1 sale stages bids-ready/revealed/outcome before completed with one publish per step", async () => {
+    const clock = new FakeClock(0);
+    const manager = createDemoManager(clock);
+    const { events, updates } = collectEvents();
+    const room = manager.createAllAi({ matchId: "r1-sale-frames", seed: "e2e-demo-seed", events });
+    await room.initializeDemoToAuctionReady();
+    updates.length = 0;
+    const kinds: string[] = [];
+    let guard = 0;
+    let sawCompletedCoreWhilePresenting = false;
+    for (;;) {
+      if (room.demoState.presentation?.kind === "completed") break;
+      const beforeUpdates = updates.length;
+      const step = await room.demoStep();
+      expect(step.changed).toBe(true);
+      expect(updates.length - beforeUpdates).toBe(1);
+      kinds.push(step.checkpoint!.kind);
+      if (room.isCompleted && step.checkpoint!.kind !== "completed") {
+        sawCompletedCoreWhilePresenting = true;
+        expect(room.publicView().phase).not.toBe("completed");
+        expect(room.publicView().result).toBeUndefined();
+      }
+      if (guard++ > 40) throw new Error(`stuck: ${kinds.join(",")}`);
+    }
+    expect(kinds.includes("bids-ready")).toBe(true);
+    const saleIdx = kinds.indexOf("bids-revealed");
+    expect(saleIdx).toBeGreaterThanOrEqual(0);
+    expect(kinds.slice(saleIdx)).toEqual(["bids-revealed", "round-outcome", "completed"]);
+    expect(kinds.join(">")).not.toMatch(/bids-progress>completed/);
+    expect(sawCompletedCoreWhilePresenting).toBe(true);
+    expect(room.demoState.paused).toBe(true);
+    expect(room.activeDeadlineAtMs).toBeNull();
+  });
+
+  it("multi-round seed never jumps bids-progress directly to completed", async () => {
+    const clock = new FakeClock(0);
+    const manager = createDemoManager(clock);
+    const { events, updates } = collectEvents();
+    const room = manager.createAllAi({ matchId: "multi-frames", seed: "it-v2-seed", events });
+    await room.initializeDemoToAuctionReady();
+    updates.length = 0;
+    const kinds: string[] = [];
+    let guard = 0;
+    let prev: string | null = room.demoState.presentation?.kind ?? null;
+    for (;;) {
+      if (room.demoState.presentation?.kind === "completed") break;
+      const beforeUpdates = updates.length;
+      const step = await room.demoStep();
+      expect(updates.length - beforeUpdates).toBe(1);
+      kinds.push(step.checkpoint!.kind);
+      expect(`${prev}>${step.checkpoint!.kind}`).not.toBe("bids-progress>completed");
+      prev = step.checkpoint!.kind;
+      if (guard++ > 80) throw new Error("too many steps");
+    }
+    expect(kinds.filter((k) => k === "bids-revealed").length).toBeGreaterThanOrEqual(2);
+    expect(kinds[kinds.length - 3]).toBe("bids-revealed");
+    expect(kinds[kinds.length - 2]).toBe("round-outcome");
+    expect(kinds[kinds.length - 1]).toBe("completed");
   });
 
   it("step consumes multiple internal actions when needed but yields one checkpoint", async () => {
@@ -375,14 +436,14 @@ describe("session runtime (in-memory, FakeClock)", () => {
       const room = manager.createAllAi({ matchId: "det-uniform", seed: "det-seed", events });
       if (mode === "step") {
         let guard = 0;
-        while (!room.isCompleted && guard++ < 500) {
+        while (!(room.isCompleted && room.demoState.presentation?.kind === "completed") && guard++ < 500) {
           await room.demoStep();
         }
       } else {
         room.setDemoSpeed(mode === "speed1" ? 1 : 8);
         room.setDemoPaused(false);
         let guard = 0;
-        while (!room.isCompleted && guard++ < 500) {
+        while (!(room.isCompleted && room.demoState.presentation?.kind === "completed") && guard++ < 2000) {
           clock.advanceBy(5_000);
           await room.kick();
         }

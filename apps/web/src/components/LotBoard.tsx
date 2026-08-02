@@ -148,6 +148,9 @@ export function LotBoardView({
                   {TIER_MARK[object.tier] ?? "?"}
                 </span>
               ) : null}
+              {object.category && !object.identity && !object.tier ? (
+                <span className="object-category">{t(strings, `category.${object.category}`)}</span>
+              ) : null}
               {object.identity ? (
                 <span className="object-name">{t(strings, `item.${object.identity}.name`)}</span>
               ) : null}
@@ -166,7 +169,16 @@ export function LotBoardView({
                 ? t(strings, `item.${focusedObject.identity}.name`)
                 : t(strings, "board.unidentified")}
             </strong>
-            <button onClick={() => setFocused(null)} aria-label={t(strings, "board.closeDetail")}>
+            <button
+              onClick={() => {
+                const returnId = focusedObject.revealId;
+                setFocused(null);
+                requestAnimationFrame(() => {
+                  cardRefs.current.get(returnId)?.focus();
+                });
+              }}
+              aria-label={t(strings, "board.closeDetail")}
+            >
               ×
             </button>
           </header>
@@ -237,6 +249,7 @@ function describeObject(strings: Strings, obj: RevealedObject): string {
   const parts: string[] = [];
   if (obj.identity) parts.push(t(strings, `item.${obj.identity}.name`));
   else if (obj.tier) parts.push(t(strings, `tier.${obj.tier}`));
+  else if (obj.category) parts.push(t(strings, `category.${obj.category}`));
   else if (obj.cells) parts.push(t(strings, "board.shapeOnly"));
   else if (obj.exactValue !== undefined) parts.push(String(obj.exactValue));
   return parts.join(" ") || t(strings, "board.unidentified");

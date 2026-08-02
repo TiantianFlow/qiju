@@ -427,14 +427,15 @@ export function buildCatalogV2(): ItemDef[] {
   const catalog: ItemDef[] = [];
   CATEGORY_ORDER.forEach((category, ci) => {
     for (const tier of TIER_ORDER) {
+      const footprint = footprintForV2(tier, ci);
       catalog.push({
         id: `syn.${category}.${tier}` as ItemId,
         nameKey: `item.syn.${category}.${tier}.name`,
         category,
         tier,
-        shapeId: "single",
+        shapeId: `rect.${footprint.width}x${footprint.height}` as ItemDef["shapeId"],
         value: computeValue(tier, category),
-        footprint: footprintForV2(tier, ci),
+        footprint,
       });
     }
   });

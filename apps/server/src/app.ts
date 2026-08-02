@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -201,9 +201,16 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
       return reply.code(400).send({ error: "COMMAND_SCHEMA_INVALID" });
     }
     const principalId = resolvePrincipal(request, reply);
-    const matchId = randomUUID();
     const seed =
       parsed.data.seed && env.ALLOW_FIXED_SEED ? parsed.data.seed : randomBytes(12).toString("hex");
+    // Fixed seeds derive a stable matchId so agent RNG (which mixes matchId) is reproducible.
+    const matchId =
+      parsed.data.seed && env.ALLOW_FIXED_SEED
+        ? `seed-${createHash("sha256").update(`${parsed.data.mode}:${parsed.data.seed}`).digest("hex").slice(0, 32)}`
+        : randomUUID();
+    if (manager.get(matchId)) {
+      manager.delete(matchId);
+    }
 
     const roomEvents: RoomEvents = {
       onViewUpdate(update: ViewUpdate, revision: number) {
@@ -429,21 +436,25 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
               payload: room.demoState,
             } satisfies ServerEnvelope),
           );
-          ctx.serverSequence += 1;
-          socket.send(
-            JSON.stringify({
-              protocolVersion: PROTOCOL_VERSION,
-              serverSequence: ctx.serverSequence,
-              matchId,
-              revision: room.revision,
-              type: "snapshot",
-              payload: {
-                view: room.viewForPrincipal(principalId ?? "observer"),
-                deadlineAtMs: room.activeDeadlineAtMs,
-                demo: room.demoState,
-              },
-            } satisfies ServerEnvelope),
-          );
+          // demo_step already published exactly one presentation snapshot from the room.
+          // Other demo controls still need a snapshot so clients refresh demo flags.
+          if (dc.type !== "demo_step") {
+            ctx.serverSequence += 1;
+            socket.send(
+              JSON.stringify({
+                protocolVersion: PROTOCOL_VERSION,
+                serverSequence: ctx.serverSequence,
+                matchId,
+                revision: room.revision,
+                type: "snapshot",
+                payload: {
+                  view: room.viewForPrincipal(principalId ?? "observer"),
+                  deadlineAtMs: room.activeDeadlineAtMs,
+                  demo: room.demoState,
+                },
+              } satisfies ServerEnvelope),
+            );
+          }
           return;
         }
 

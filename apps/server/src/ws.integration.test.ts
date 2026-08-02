@@ -84,6 +84,38 @@ describe("server integration (real WebSocket)", () => {
     return { matchId: body.matchId, cookie };
   }
 
+  it("each demo_step publishes exactly one new observer snapshot and stages sale frames", async () => {
+    const { matchId, cookie } = await createMatch("all-ai", "e2e-demo-seed");
+    const client = new WsClient(`ws://localhost:${port}/api/v1/matches/${matchId}/stream`, cookie);
+    await client.open();
+    const kinds: string[] = [];
+    let guard = 0;
+    for (;;) {
+      const demo = client.demo as { presentation?: { kind: string; seq: number } };
+      if (demo.presentation?.kind === "completed") break;
+      const snapBefore = client.messages.filter((m) => m.type === "snapshot").length;
+      const seqBefore = demo.presentation?.seq ?? 0;
+      client.send({ protocolVersion: 1, matchId, type: "demo_step" });
+      await client.waitFor((m) => m.type === "demo_state", 15_000);
+      await new Promise((r) => setTimeout(r, 30));
+      const snapAfter = client.messages.filter((m) => m.type === "snapshot").length;
+      expect(snapAfter - snapBefore).toBe(1);
+      const presentation = (client.demo as { presentation: { kind: string; seq: number } }).presentation;
+      expect(presentation.seq).toBe(seqBefore + 1);
+      kinds.push(presentation.kind);
+      if (presentation.kind !== "completed") {
+        expect((client.view as { phase: string }).phase).not.toBe("completed");
+      }
+      if (guard++ > 40) throw new Error(`stuck ${kinds.join(",")}`);
+    }
+    expect(kinds.includes("bids-ready")).toBe(true);
+    expect(kinds.includes("bids-revealed")).toBe(true);
+    expect(kinds.includes("round-outcome")).toBe(true);
+    expect(kinds.at(-1)).toBe("completed");
+    expect(kinds.join(">")).not.toMatch(/bids-progress>completed/);
+    client.close();
+  }, 60_000);
+
   it("all-AI demo starts paused at auction-ready with deadlineAtMs null and steps advance presentation", async () => {
     const { matchId, cookie } = await createMatch("all-ai", "it-demo-1");
     const client = new WsClient(`ws://localhost:${port}/api/v1/matches/${matchId}/stream`, cookie);
@@ -183,13 +215,17 @@ describe("server integration (real WebSocket)", () => {
     const { matchId, cookie } = await createMatch("all-ai", "it-complete-1");
     const client = new WsClient(`ws://localhost:${port}/api/v1/matches/${matchId}/stream`, cookie);
     await client.open();
-    for (let i = 0; i < 40; i++) {
-      if ((client.view as { phase: string }).phase === "completed") break;
+    for (let i = 0; i < 80; i++) {
+      const demo = client.demo as { presentation?: { kind: string } } | null;
+      if ((client.view as { phase: string }).phase === "completed" && demo?.presentation?.kind === "completed") {
+        break;
+      }
       client.send({ protocolVersion: 1, matchId, type: "demo_step" });
       await client.waitFor((m) => m.type === "demo_state", 15_000);
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 20));
     }
     expect((client.view as { phase: string }).phase).toBe("completed");
+    expect((client.demo as { presentation: { kind: string } }).presentation.kind).toBe("completed");
     const board = (client.view as { board: { revealedObjects: Array<{ identity?: string; exactValue?: number }> } }).board;
     expect(board.revealedObjects.length).toBeGreaterThanOrEqual(8);
     for (const obj of board.revealedObjects) {

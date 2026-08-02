@@ -7,6 +7,7 @@ import {
   observeSeat,
   legalActions,
   hashState,
+  candidatesForSlot,
   type GameCommand,
   type MatchState,
   SEAT_IDS,
@@ -14,7 +15,13 @@ import {
 
 const runtimeV2 = compileDemoV2();
 
-function lockAllSeats(state: MatchState): MatchState {
+function lockAllSeats(
+  state: MatchState,
+  loadout: { analystId: "analyst.surveyor" | "analyst.cataloger" | "analyst.appraiser" | "analyst.statistician"; toolPackageId: "kit.survey" | "kit.catalog" | "kit.appraisal" } = {
+    analystId: "analyst.surveyor",
+    toolPackageId: "kit.survey",
+  },
+): MatchState {
   let current = state;
   for (const seatId of SEAT_IDS) {
     const seat = current.seats.find((s) => s.seatId === seatId)!;
@@ -22,8 +29,8 @@ function lockAllSeats(state: MatchState): MatchState {
       const cmd: GameCommand = {
         kind: "select_loadout",
         seatId,
-        analystId: "analyst.surveyor",
-        toolPackageId: "kit.survey",
+        analystId: loadout.analystId,
+        toolPackageId: loadout.toolPackageId,
       };
       const r = transition(runtimeV2, current, cmd);
       if (r.kind !== "accepted") throw new Error("select failed");
@@ -36,9 +43,57 @@ function lockAllSeats(state: MatchState): MatchState {
   return current;
 }
 
-function createAuction(seed: string): MatchState {
+function lockSeatsWithLoadouts(
+  state: MatchState,
+  loadouts: Partial<
+    Record<
+      (typeof SEAT_IDS)[number],
+      {
+        analystId: "analyst.surveyor" | "analyst.cataloger" | "analyst.appraiser" | "analyst.statistician";
+        toolPackageId: "kit.survey" | "kit.catalog" | "kit.appraisal";
+      }
+    >
+  >,
+): MatchState {
+  let current = state;
+  for (const seatId of SEAT_IDS) {
+    const loadout = loadouts[seatId] ?? {
+      analystId: "analyst.surveyor" as const,
+      toolPackageId: "kit.survey" as const,
+    };
+    const seat = current.seats.find((s) => s.seatId === seatId)!;
+    if (!seat.analystId) {
+      const r = transition(runtimeV2, current, {
+        kind: "select_loadout",
+        seatId,
+        analystId: loadout.analystId,
+        toolPackageId: loadout.toolPackageId,
+      });
+      if (r.kind !== "accepted") throw new Error("select failed");
+      current = r.nextState;
+    }
+    const r2 = transition(runtimeV2, current, { kind: "lock_setup", seatId });
+    if (r2.kind !== "accepted") throw new Error("lock failed");
+    current = r2.nextState;
+  }
+  return current;
+}
+
+function createAuction(
+  seed: string,
+  loadout?: {
+    analystId: "analyst.surveyor" | "analyst.cataloger" | "analyst.appraiser" | "analyst.statistician";
+    toolPackageId: "kit.survey" | "kit.catalog" | "kit.appraisal";
+  },
+): MatchState {
   const state = createMatch({ matchId: `m-${seed}`, seed, runtime: runtimeV2 });
-  return lockAllSeats(state);
+  if (!loadout) return lockAllSeats(state);
+  return lockSeatsWithLoadouts(state, {
+    seat1: loadout,
+    seat2: { analystId: "analyst.surveyor", toolPackageId: "kit.survey" },
+    seat3: { analystId: "analyst.surveyor", toolPackageId: "kit.survey" },
+    seat4: { analystId: "analyst.surveyor", toolPackageId: "kit.survey" },
+  });
 }
 
 describe("content.synthetic.v2 rectangular footprints", () => {
@@ -245,26 +300,102 @@ describe("multi-target public effect aggregation", () => {
 });
 
 describe("category-only private overlay", () => {
-  it("seat-only category reveal updates that seat's board overlay only", () => {
-    const state = createAuction("v2-cat-overlay-1");
+  it("cataloger category-only facts appear on owning seat board with stable anchor and no cells", () => {
+    const state = createAuction("v2-cat-overlay-1", {
+      analystId: "analyst.cataloger",
+      toolPackageId: "kit.catalog",
+    });
     const seatView = observeSeat(runtimeV2, state, "seat1");
     const pubView = observePublic(runtimeV2, state);
-    const seatObjects = seatView.board!.revealedObjects;
-    const pubObjects = pubView.board!.revealedObjects;
-    const seatOnly = seatObjects.filter(
-      (o) => !pubObjects.some((p) => p.revealId === o.revealId),
+    const categoryOnly = seatView.board!.revealedObjects.filter(
+      (o) => o.category !== undefined && o.cells === undefined && o.tier === undefined && o.identity === undefined,
     );
-    expect(seatOnly.length).toBeGreaterThan(0);
-    for (const o of seatOnly) {
+    expect(categoryOnly.length).toBeGreaterThan(0);
+    for (const o of categoryOnly) {
+      expect(o.category).toBeDefined();
+      expect(o.anchor).toBeDefined();
+      expect(o.cells).toBeUndefined();
       expect(o.revealId).not.toMatch(/S0\d/);
+      expect(pubView.board!.revealedObjects.some((p) => p.revealId === o.revealId && p.category === o.category)).toBe(
+        false,
+      );
     }
     const otherSeat = observeSeat(runtimeV2, state, "seat2");
-    const seat1Tokens = new Set(seatOnly.map((o) => o.revealId));
-    for (const o of otherSeat.board!.revealedObjects) {
-      if (seat1Tokens.has(o.revealId)) {
-        const seat1Obj = seatOnly.find((x) => x.revealId === o.revealId)!;
-        expect(Object.keys(o).length).toBeLessThanOrEqual(Object.keys(seat1Obj).length);
-      }
+    for (const o of categoryOnly) {
+      const other = otherSeat.board!.revealedObjects.find((x) => x.revealId === o.revealId);
+      expect(other?.category).toBeUndefined();
     }
+    const serialized = JSON.stringify(seatView);
+    expect(serialized).toContain('"category"');
+    expect(serialized).not.toMatch(/S0\d/);
+  });
+});
+
+describe("value-only private overlay", () => {
+  it("appraiser value-only facts appear with stable anchor, no footprint cells, seat-private only", () => {
+    const state = createAuction("v2-val-overlay-1", {
+      analystId: "analyst.appraiser",
+      toolPackageId: "kit.appraisal",
+    });
+    const seatView = observeSeat(runtimeV2, state, "seat1");
+    const pubView = observePublic(runtimeV2, state);
+    const valueOnly = seatView.board!.revealedObjects.filter(
+      (o) => o.exactValue !== undefined && o.cells === undefined && o.identity === undefined,
+    );
+    expect(valueOnly.length).toBeGreaterThan(0);
+    for (const o of valueOnly) {
+      expect(o.exactValue).toBeDefined();
+      expect(o.anchor).toBeDefined();
+      expect(o.cells).toBeUndefined();
+      expect(pubView.board!.revealedObjects.some((p) => p.revealId === o.revealId && p.exactValue === o.exactValue)).toBe(
+        false,
+      );
+    }
+    const dto = JSON.stringify(seatView.board);
+    expect(dto).toContain('"exactValue"');
+    expect(dto).toContain('"anchor"');
+  });
+});
+
+describe("v2 rectangular shape knowledge and candidate closure", () => {
+  it("catalog shapeIds encode real footprints and are not overloaded single", () => {
+    const shapes = new Set(runtimeV2.catalogSorted.map((i) => i.shapeId));
+    expect(shapes.has("single")).toBe(false);
+    expect([...shapes].every((s) => /^rect\.\d+x\d+$/.test(s))).toBe(true);
+    expect(shapes.has("rect.2x1")).toBe(true);
+    expect(shapes.has("rect.1x2")).toBe(true);
+    expect(shapes.has("rect.2x2")).toBe(true);
+    expect(shapes.has("rect.3x2")).toBe(true);
+  });
+
+  it("shape facts and candidate closure filter by revealed footprint dimensions", () => {
+    const state = createAuction("v2-shape-close-1", {
+      analystId: "analyst.surveyor",
+      toolPackageId: "kit.survey",
+    });
+    const seatView = observeSeat(runtimeV2, state, "seat1");
+    const shaped = seatView.board!.revealedObjects.filter((o) => o.cells && o.cells.length > 0);
+    expect(shaped.length).toBeGreaterThan(0);
+    const dims = new Set<string>();
+    for (const o of shaped) {
+      const xs = o.cells!.map((c) => c.x);
+      const ys = o.cells!.map((c) => c.y);
+      const w = Math.max(...xs) - Math.min(...xs) + 1;
+      const h = Math.max(...ys) - Math.min(...ys) + 1;
+      dims.add(`${w}x${h}`);
+      const slotId = Object.entries(state.revealTokenBySlot ?? {}).find(([, tok]) => tok === o.revealId)?.[0];
+      expect(slotId).toBeDefined();
+      const range = candidatesForSlot(runtimeV2, state, "seat1", slotId as never);
+      expect(range.candidateIds.length).toBeLessThan(runtimeV2.catalogSorted.length);
+      for (const id of range.candidateIds) {
+        const item = runtimeV2.catalog.get(id)!;
+        expect(item.footprint).toEqual({ width: w, height: h });
+        expect(item.shapeId).toBe(`rect.${w}x${h}`);
+      }
+      expect(JSON.stringify(o)).not.toMatch(/"single"/);
+    }
+    expect(dims.size).toBeGreaterThanOrEqual(1);
+    const pubIntel = JSON.stringify(seatView.publicIntel);
+    expect(pubIntel).not.toMatch(/"shapeId":"single"/);
   });
 });
