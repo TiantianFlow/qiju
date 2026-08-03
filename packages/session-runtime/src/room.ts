@@ -3,11 +3,13 @@ import {
   observePublic,
   observeSeat,
   transition,
+  SEAT_IDS,
   type CompiledRuleRuntime,
   type DomainEvent,
   type GameCommand,
   type MatchState,
   type PublicView,
+  type RoundRevealRecord,
   type SeatId,
   type SeatObservation,
 } from "@qiju/game-core";
@@ -289,26 +291,109 @@ export class RoomExecutor {
     return "round-outcome";
   }
 
-  /** Project a player-visible frame; may mask completed phase until that frame is due. */
-  private projectPresentationView(kind: PresentationCheckpointKind): PublicView {
-    const base = observePublic(this.config.runtime, this.state);
-    if (kind === "completed") return base;
-    if (base.phase !== "completed") return base;
-    const { result: _result, ...rest } = base;
-    return {
-      ...rest,
-      phase: "auction",
-    };
+  /**
+   * Build a presentation-safe MatchState for a staged frame.
+   * Never projects mid-auction frames from a raw completed state (that would
+   * flip concealSlots off and dump the full lot). Instead, clone and rewind
+   * phase/round/window/reveals/intel to the semantic scope of `kind`.
+   */
+  private buildPresentationState(
+    kind: PresentationCheckpointKind,
+    focusReveal?: RoundRevealRecord,
+  ): MatchState {
+    const s = structuredClone(this.state) as MatchState;
+
+    if (kind === "completed") {
+      return s;
+    }
+
+    // Mid-auction concealment depends on phase !== completed.
+    s.phase = { kind: "auction" };
+
+    if (!focusReveal) {
+      return s;
+    }
+
+    const focusRound = focusReveal.round;
+
+    if (kind === "bids-ready") {
+      s.round = focusRound;
+      s.reveals = s.reveals.filter((r) => r.round < focusRound);
+      s.intel = s.intel.filter((r) => r.round <= focusRound);
+      const participants = SEAT_IDS.filter((seatId) => focusReveal.bids[seatId] !== undefined);
+      const seats = participants.length > 0 ? [...participants] : [...SEAT_IDS];
+      const bids: NonNullable<MatchState["window"]>["bids"] = {
+        seat1: { amount: 0, locked: true, source: "explicit" },
+        seat2: { amount: 0, locked: true, source: "explicit" },
+        seat3: { amount: 0, locked: true, source: "explicit" },
+        seat4: { amount: 0, locked: true, source: "explicit" },
+      };
+      for (const seatId of seats) {
+        bids[seatId] = { amount: 0, locked: true, source: "explicit" };
+      }
+      s.window = {
+        actionWindowId: `presentation:${s.matchId}:r${focusRound}:ready`,
+        kind: focusReveal.kind,
+        round: focusRound,
+        participants: seats,
+        bids,
+        toolUsed: { ...focusReveal.toolUsed },
+      };
+      return s;
+    }
+
+    if (kind === "bids-revealed") {
+      s.round = focusRound;
+      s.intel = s.intel.filter((r) => r.round <= focusRound);
+      s.window = undefined;
+      s.reveals = s.reveals
+        .filter((r) => r.round <= focusRound)
+        .map((r) => {
+          if (r.round !== focusRound) return r;
+          // Show sealed bids / tools, but withhold winner/payment until round-outcome.
+          const { buyerSeatId: _b, winningBid: _w, ...rest } = r;
+          return { ...rest, outcome: r.outcome === "sold" || r.outcome === "no_sale" ? "continue" : r.outcome };
+        });
+      return s;
+    }
+
+    if (kind === "round-outcome") {
+      s.round = focusRound;
+      s.intel = s.intel.filter((r) => r.round <= focusRound);
+      s.window = undefined;
+      s.reveals = s.reveals.filter((r) => r.round <= focusRound);
+      return s;
+    }
+
+    return s;
   }
 
-  private enqueueKinds(kinds: PresentationCheckpointKind[]): void {
+  /** Project a player-visible frame with checkpoint-scoped secrecy. */
+  private projectPresentationView(
+    kind: PresentationCheckpointKind,
+    focusReveal?: RoundRevealRecord,
+  ): PublicView {
+    if (kind === "completed") {
+      return observePublic(this.config.runtime, this.state);
+    }
+    const presentationState = this.buildPresentationState(kind, focusReveal);
+    return observePublic(this.config.runtime, presentationState);
+  }
+
+  private enqueueKinds(kinds: PresentationCheckpointKind[], focusReveal?: RoundRevealRecord): void {
     for (const kind of kinds) {
       const lastQueued = this.presentationQueue[this.presentationQueue.length - 1]?.kind;
       const lastPublished = this.presentationCheckpoint?.kind;
       if (kind === lastQueued || (this.presentationQueue.length === 0 && kind === lastPublished)) {
         continue;
       }
-      this.presentationQueue.push({ kind, view: this.projectPresentationView(kind) });
+      const needsFocus =
+        focusReveal !== undefined &&
+        (kind === "bids-ready" || kind === "bids-revealed" || kind === "round-outcome");
+      this.presentationQueue.push({
+        kind,
+        view: this.projectPresentationView(kind, needsFocus ? focusReveal : undefined),
+      });
     }
   }
 
@@ -346,7 +431,7 @@ export class RoomExecutor {
           staged.push(next);
         }
       }
-      this.enqueueKinds(staged);
+      this.enqueueKinds(staged, lastReveal);
       return;
     }
 

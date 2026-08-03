@@ -116,6 +116,67 @@ describe("server integration (real WebSocket)", () => {
     client.close();
   }, 60_000);
 
+  it("wire snapshots keep bids-ready/revealed secret for e2e-demo-seed and seed-multi-1", async () => {
+    for (const seed of ["e2e-demo-seed", "seed-multi-1"] as const) {
+      const { matchId, cookie } = await createMatch("all-ai", seed);
+      const client = new WsClient(`ws://localhost:${port}/api/v1/matches/${matchId}/stream`, cookie);
+      await client.open();
+      let sawReady = false;
+      let sawRevealed = false;
+      let lotSize = 0;
+      let guard = 0;
+      while (guard++ < 80) {
+        const demo = client.demo as { presentation?: { kind: string } };
+        const view = client.view as {
+          phase: string;
+          round: number;
+          result?: unknown;
+          slots: unknown[];
+          reveals: Array<{ round: number; bids: Record<string, number>; winningBid?: number; buyerSeatId?: string }>;
+          board?: { revealedObjects: Array<{ identity?: string; exactValue?: number }> };
+          window?: { round: number; lockedSeats: string[]; participants: string[] };
+        } | null;
+        if (demo.presentation?.kind === "completed") {
+          expect(view?.phase).toBe("completed");
+          expect(view?.result).toBeDefined();
+          expect(view!.board!.revealedObjects.length).toBeGreaterThanOrEqual(8);
+          break;
+        }
+        client.send({ protocolVersion: 1, matchId, type: "demo_step" });
+        await client.waitFor((m) => m.type === "demo_state", 15_000);
+        await new Promise((r) => setTimeout(r, 20));
+        const kind = (client.demo as { presentation: { kind: string } }).presentation.kind;
+        const v = client.view as typeof view;
+        if (!v?.board) continue;
+        if (lotSize === 0) lotSize = Math.max(v.board.revealedObjects.length, 8);
+        if (kind === "bids-ready") {
+          sawReady = true;
+          expect(v.phase).toBe("auction");
+          expect(v.result).toBeUndefined();
+          expect(v.slots).toHaveLength(0);
+          expect(v.window?.round).toBe(v.round);
+          expect(v.reveals.some((r) => r.round === v.round)).toBe(false);
+          expect(v.board.revealedObjects.filter((o) => o.identity).length).toBeLessThan(12);
+          expect(JSON.stringify(v)).not.toMatch(/"winningBid":\s*[1-9]/);
+        }
+        if (kind === "bids-revealed") {
+          sawRevealed = true;
+          expect(v.phase).toBe("auction");
+          expect(v.result).toBeUndefined();
+          expect(v.slots).toHaveLength(0);
+          const current = v.reveals.find((r) => r.round === v.round);
+          expect(current).toBeDefined();
+          expect(Object.keys(current!.bids).length).toBeGreaterThan(0);
+          expect(current!.winningBid).toBeUndefined();
+          expect(current!.buyerSeatId).toBeUndefined();
+        }
+      }
+      expect(sawReady).toBe(true);
+      expect(sawRevealed).toBe(true);
+      client.close();
+    }
+  }, 120_000);
+
   it("all-AI demo starts paused at auction-ready with deadlineAtMs null and steps advance presentation", async () => {
     const { matchId, cookie } = await createMatch("all-ai", "it-demo-1");
     const client = new WsClient(`ws://localhost:${port}/api/v1/matches/${matchId}/stream`, cookie);

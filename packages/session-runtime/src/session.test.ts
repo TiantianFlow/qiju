@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { compileDemoV0, compileDemoV2 } from "@qiju/rules-demo";
 import { type PublicView, type SeatObservation } from "@qiju/game-core";
@@ -360,6 +361,96 @@ describe("session runtime (in-memory, FakeClock)", () => {
     expect(kinds[kinds.length - 3]).toBe("bids-revealed");
     expect(kinds[kinds.length - 2]).toBe("round-outcome");
     expect(kinds[kinds.length - 1]).toBe("completed");
+  });
+
+  it("bids-ready frames keep sealed bids and unrevealed lot secret (e2e-demo-seed)", async () => {
+    const clock = new FakeClock(0);
+    const manager = createDemoManager(clock);
+    const { events } = collectEvents();
+    const room = manager.createAllAi({ matchId: "secrecy-r1", seed: "e2e-demo-seed", events });
+    await room.initializeDemoToAuctionReady();
+    const lotSize = room.currentState.lot!.slots.length;
+    let sawBidsReady = false;
+    let sawBidsRevealed = false;
+    let guard = 0;
+    while (room.demoState.presentation?.kind !== "completed" && guard++ < 80) {
+      await room.demoStep();
+      const kind = room.demoState.presentation?.kind;
+      const view = room.publicView();
+      if (kind === "bids-ready") {
+        sawBidsReady = true;
+        expect(view.phase).toBe("auction");
+        expect(view.result).toBeUndefined();
+        expect(view.slots).toHaveLength(0);
+        expect(view.window?.round).toBe(view.round);
+        expect(view.window?.lockedSeats.length).toBe(view.window?.participants.length);
+        expect(view.reveals.some((r) => r.round === view.round)).toBe(false);
+        expect(view.board!.revealedObjects.length).toBeLessThan(lotSize);
+        expect(view.board!.revealedObjects.filter((o) => o.identity).length).toBeLessThan(lotSize);
+        expect(view.board!.revealedObjects.filter((o) => o.exactValue !== undefined).length).toBeLessThan(lotSize);
+      }
+      if (kind === "bids-revealed") {
+        sawBidsRevealed = true;
+        expect(view.phase).toBe("auction");
+        expect(view.result).toBeUndefined();
+        expect(view.slots).toHaveLength(0);
+        const current = view.reveals.find((r) => r.round === view.round);
+        expect(current).toBeDefined();
+        expect(Object.values(current!.bids).some((amount) => typeof amount === "number")).toBe(true);
+        expect(current!.winningBid).toBeUndefined();
+        expect(current!.buyerSeatId).toBeUndefined();
+        expect(view.board!.revealedObjects.length).toBeLessThan(lotSize);
+      }
+      if (kind === "round-outcome") {
+        expect(view.phase).toBe("auction");
+        expect(view.result).toBeUndefined();
+        expect(view.slots).toHaveLength(0);
+        const current = view.reveals.find((r) => r.round === view.round);
+        expect(current?.outcome === "sold" || current?.outcome === "no_sale").toBe(true);
+        expect(view.board!.revealedObjects.length).toBeLessThan(lotSize);
+      }
+    }
+    expect(sawBidsReady).toBe(true);
+    expect(sawBidsRevealed).toBe(true);
+    const completed = room.publicView();
+    expect(completed.phase).toBe("completed");
+    expect(completed.result).toBeDefined();
+    expect(completed.slots.length).toBe(lotSize);
+    expect(completed.board!.revealedObjects).toHaveLength(lotSize);
+    expect(completed.board!.revealedObjects.every((o) => o.identity && o.exactValue !== undefined)).toBe(true);
+  });
+
+  it("bids-ready frames keep sealed bids and unrevealed lot secret (seed-multi-1)", async () => {
+    const clock = new FakeClock(0);
+    const manager = createDemoManager(clock);
+    const { events } = collectEvents();
+    // matchId enters agentSeed (`${matchId}:${seed}`); use the production-derived id so this seed stays multi-round.
+    const matchId = `seed-${createHash("sha256").update("all-ai:seed-multi-1").digest("hex").slice(0, 32)}`;
+    const room = manager.createAllAi({ matchId, seed: "seed-multi-1", events });
+    await room.initializeDemoToAuctionReady();
+    const lotSize = room.currentState.lot!.slots.length;
+    const readyRounds: number[] = [];
+    let guard = 0;
+    while (room.demoState.presentation?.kind !== "completed" && guard++ < 80) {
+      await room.demoStep();
+      const kind = room.demoState.presentation?.kind;
+      const view = room.publicView();
+      if (kind === "bids-ready") {
+        readyRounds.push(view.round);
+        expect(view.phase).toBe("auction");
+        expect(view.result).toBeUndefined();
+        expect(view.slots).toHaveLength(0);
+        expect(view.window?.round).toBe(view.round);
+        expect(view.reveals.some((r) => r.round === view.round)).toBe(false);
+        expect(view.board!.revealedObjects.length).toBeLessThan(lotSize);
+        expect(view.board!.revealedObjects.filter((o) => o.exactValue !== undefined).length).toBeLessThan(lotSize);
+      }
+    }
+    expect(readyRounds.length).toBeGreaterThanOrEqual(2);
+    expect(readyRounds[0]).toBe(1);
+    expect(readyRounds.some((r) => r > 1)).toBe(true);
+    const completed = room.publicView();
+    expect(completed.board!.revealedObjects).toHaveLength(lotSize);
   });
 
   it("step consumes multiple internal actions when needed but yields one checkpoint", async () => {

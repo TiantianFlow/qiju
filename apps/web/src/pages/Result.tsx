@@ -34,12 +34,12 @@ export function ResultPage({
       <h2>{t(strings, "result.title")}</h2>
       {acq.buyerSeatId ? (
         <section className="result-summary" data-testid="result-summary">
-          <p>
-            {t(strings, "result.buyer")}: <strong>{acq.buyerSeatId}</strong> (
+          <p data-testid="result-sold">
+            {t(strings, "result.buyer")}: <strong data-testid="result-buyer">{acq.buyerSeatId}</strong> (
             {t(strings, labelKey)})
           </p>
           <p>
-            {t(strings, "result.winningBid")}: <strong>{acq.winningBid}</strong>
+            {t(strings, "result.winningBid")}: <strong data-testid="result-winning-bid">{acq.winningBid}</strong>
           </p>
           <p>
             {t(strings, "result.actualValue")}: <strong>{actualValue}</strong>
