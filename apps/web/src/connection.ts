@@ -2,6 +2,13 @@ import type { MatchView, ServerEnvelope, SnapshotPayload } from "./types";
 
 type Listener = () => void;
 
+function generateCommandId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "cmd-" + Math.random().toString(36).slice(2, 11) + "-" + Date.now().toString(36);
+}
+
 export class MatchConnection {
   private socket: WebSocket | null = null;
   private listeners = new Set<Listener>();
@@ -88,7 +95,7 @@ export class MatchConnection {
 
   sendCommand(payload: Record<string, unknown>): string | null {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return null;
-    const commandId = crypto.randomUUID();
+    const commandId = generateCommandId();
     this.pendingCommandId = commandId;
     this.socket.send(
       JSON.stringify({
