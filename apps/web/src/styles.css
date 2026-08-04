@@ -301,7 +301,14 @@ button.link {
 }
 
 .bid-dock {
-  flex: 0 0 auto;
+  /* Slice 3: bottom bid segment stays pinned in-viewport regardless of how
+     tall the log/history above it grows — belt-and-suspenders alongside the
+     flex column that already guarantees it never gets pushed off-screen. */
+  flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+  z-index: 2;
 }
 
 .deadline {
@@ -498,11 +505,6 @@ button.link {
   .app-shell.game-shell {
     padding: 6px;
   }
-
-  .bid-dock {
-    position: sticky;
-    bottom: 0;
-  }
 }
 
 .catalog-overlay {
@@ -625,6 +627,24 @@ button.link {
   gap: 8px;
   align-items: flex-start;
   width: 100%;
+  min-height: 0;
+}
+
+/*
+ * Slice 2: long-gallery showcase. The full board (up to 20 rows) is never
+ * shown in one glance — a capped, locally-scrolling viewport hides the true
+ * extent so idle rows below the fold can't be used to infer the lot's total
+ * item count. Objects themselves pack densely toward the top (see engine.ts
+ * tryBacktrackingLayout), so most matches are visible without scrolling far.
+ */
+.lot-board-viewport {
+  width: 100%;
+  max-height: min(58vh, 620px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: 8px;
 }
 
 .lot-board {
@@ -682,6 +702,36 @@ button.link {
 .object-card.tier-exceptional { border-color: #d9a441; background: #4d3f24; }
 .object-card.tier-singular { border-color: #d95d5d; background: #4d2f2f; }
 
+/* High-variance rarity badges (Round-5): once an object's identity is known,
+   its true color badge overrides the coarser mechanical-tier border above. */
+.object-card.color-white { border-color: #d7dee8; background: #454c56; }
+.object-card.color-green { border-color: #6fd08a; background: #2c4a35; }
+.object-card.color-blue { border-color: #5aa8e6; background: #253c56; }
+.object-card.color-purple { border-color: #b47ee6; background: #3d2c52; }
+.object-card.color-gold { border-color: #e6b64e; background: #4d3c1a; }
+.object-card.color-red {
+  border-color: #ff5a5a;
+  background: #521f1f;
+  box-shadow: 0 0 10px rgba(255, 90, 90, 0.45);
+}
+
+.color-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.color-chip.color-white { color: #0f1620; background: #d7dee8; }
+.color-chip.color-green { color: #0f1620; background: #6fd08a; }
+.color-chip.color-blue { color: #0f1620; background: #5aa8e6; }
+.color-chip.color-purple { color: #f4eeff; background: #7a4cc2; }
+.color-chip.color-gold { color: #241a00; background: #e6b64e; }
+.color-chip.color-red { color: #fff0f0; background: #d93a3a; }
+
 .object-card.flash {
   outline: 3px solid var(--accent-2, #7cc7ff);
   outline-offset: -3px;
@@ -716,13 +766,50 @@ button.link {
   pointer-events: none;
 }
 
+/*
+ * Slice 4: true overlay. Fixed to the viewport (not the document flow), so
+ * opening it never compresses or pushes the board/console — it floats above
+ * everything with a blurred backdrop, exactly like the catalog modal.
+ */
+.object-detail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: flex;
+  justify-content: flex-end;
+  align-items: stretch;
+  padding: 0;
+  /* The container spans the full viewport but must never block clicks on the
+     board underneath — only the drawer itself opts back in below. */
+  pointer-events: none;
+}
+
+.object-detail-overlay .object-detail {
+  pointer-events: auto;
+}
+
+.object-detail-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 12, 18, 0.55);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
 .object-detail {
-  background: var(--panel);
-  border: 1px solid #2a3549;
-  border-radius: 8px;
-  padding: 8px 12px;
-  min-width: 220px;
-  width: min(100%, 480px);
+  position: relative;
+  z-index: 1;
+  background: rgba(22, 30, 44, 0.97);
+  border-left: 1px solid #3a4d6c;
+  padding: 16px;
+  min-width: 260px;
+  width: min(92vw, 420px);
+  max-height: 100dvh;
+  overflow-y: auto;
+  box-shadow: -18px 0 48px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .object-detail header {
@@ -736,7 +823,49 @@ button.link {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 2px 12px;
-  margin: 6px 0 0;
+  margin: 0;
+}
+
+.candidate-list h4 {
+  margin: 0 0 6px;
+}
+
+.candidate-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.candidate-list li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  background: var(--panel-2);
+  border: 1px solid #33415a;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.candidate-name {
+  font-weight: 600;
+  flex: 1 1 auto;
+}
+
+.candidate-category {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.candidate-value {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 
 .aggregate-facts {

@@ -46,8 +46,24 @@ export function parseRectangularShapeId(
   return { width: Number(m[1]), height: Number(m[2]) };
 }
 
-export type ItemId = `syn.${CategoryId}.${TierId}`;
+export type ItemId = string;
 export type SlotId = `S${string}`;
+
+/**
+ * Presentation-layer rarity color, independent of the mechanical `TierId` weight
+ * bucket. Multiple color bands can share one mechanical tier (e.g. white+green
+ * both draw as "documented"); named items may deliberately mismatch their
+ * band's typical value range as an intentional bluff (see content-demo v2 catalog).
+ */
+export type ColorTierId = "white" | "green" | "blue" | "purple" | "gold" | "red";
+export const COLOR_TIER_IDS: readonly ColorTierId[] = [
+  "white",
+  "green",
+  "blue",
+  "purple",
+  "gold",
+  "red",
+];
 export type AnalystId =
   | "analyst.surveyor"
   | "analyst.cataloger"
@@ -76,6 +92,8 @@ export interface ItemDef {
   shapeId: ShapeId;
   value: number;
   footprint?: { width: number; height: number };
+  /** Presentation rarity badge (v2 high-variance catalog only). */
+  colorTier?: ColorTierId;
 }
 
 export type IntelEffectSelector =

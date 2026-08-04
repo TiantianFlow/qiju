@@ -259,11 +259,22 @@ function tryBacktrackingLayout(
         if (fits(x, y, rect.width, rect.height)) candidates.push({ x, y });
       }
     }
-    for (let i = candidates.length - 1; i > 0; i--) {
-      const j = rng.nextBelow(i + 1);
-      const tmp = candidates[i]!;
-      candidates[i] = candidates[j]!;
-      candidates[j] = tmp;
+    // Dense clustering (Slice 2): candidates are already row-major (y then x)
+    // from the scan above. Shuffle only within each same-row run instead of
+    // across the whole board, so placement stays biased toward the topmost
+    // open rows — objects cluster near the top of the showcase rather than
+    // scattering across empty rows that would tip off the board's true extent.
+    let runStart = 0;
+    for (let i = 1; i <= candidates.length; i++) {
+      if (i === candidates.length || candidates[i]!.y !== candidates[runStart]!.y) {
+        for (let k = i - 1; k > runStart; k--) {
+          const j = runStart + rng.nextBelow(k - runStart + 1);
+          const tmp = candidates[k]!;
+          candidates[k] = candidates[j]!;
+          candidates[j] = tmp;
+        }
+        runStart = i;
+      }
     }
     for (const c of candidates) {
       fill(c.x, c.y, rect.width, rect.height, 1);

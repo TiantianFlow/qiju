@@ -37,7 +37,10 @@ function compileContent(content: ContentSynthetic): CompiledRuleRuntime {
       seats: 4,
       regularRounds: 5,
       maxTiebreakRounds: 1,
-      startingBudget: 20000,
+      // v2's high-variance catalog draws lots that can total from the low
+      // thousands up to tens of millions (jackpot legendaries); v0/v1 keep
+      // the original small-catalog budget so their frozen fixtures hold.
+      startingBudget: content.contentBundleId === "content.synthetic.v2" ? 2_000_000 : 20000,
       roundMultipliers: [
         { numerator: 2, denominator: 1 },
         { numerator: 8, denominator: 5 },

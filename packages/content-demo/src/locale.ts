@@ -1,4 +1,5 @@
-import { CATEGORY_ORDER, TIER_ORDER } from "./content.js";
+import { CATEGORY_ORDER, NAMED_ITEMS_V2, TIER_ORDER } from "./content.js";
+import type { ColorTierId } from "@qiju/game-core";
 
 export type LocaleDict = Record<string, string>;
 
@@ -17,10 +18,86 @@ function itemNames(): { zh: LocaleDict; en: LocaleDict } {
   return { zh, en };
 }
 
+const CATEGORY_ZH: Record<string, string> = {
+  artifact: "器物",
+  geology: "地质",
+  mechanism: "机巧",
+  botany: "植物",
+  ephemera: "文献",
+  anomaly: "异常",
+};
+
+const CATEGORY_EN: Record<string, string> = {
+  artifact: "Artifact",
+  geology: "Geology",
+  mechanism: "Mechanism",
+  botany: "Botany",
+  ephemera: "Ephemera",
+  anomaly: "Anomaly",
+};
+
+const PROCEDURAL_COLOR_ADJECTIVE: Record<Exclude<ColorTierId, "red">, { zh: string; en: string }> = {
+  white: { zh: "白蚀", en: "Weathered" },
+  green: { zh: "苔痕", en: "Verdant" },
+  blue: { zh: "靛痕", en: "Azure" },
+  purple: { zh: "绯纹", en: "Violet" },
+  gold: { zh: "鎏金", en: "Gilded" },
+};
+
+/** v2 high-variance catalog: 30 procedural color-variant names + 11 named legendaries. */
+function itemNamesV2(): { zh: LocaleDict; en: LocaleDict } {
+  const zh: LocaleDict = {};
+  const en: LocaleDict = {};
+  for (const category of CATEGORY_ORDER) {
+    for (const colorTier of Object.keys(PROCEDURAL_COLOR_ADJECTIVE) as Array<Exclude<ColorTierId, "red">>) {
+      const adjective = PROCEDURAL_COLOR_ADJECTIVE[colorTier]!;
+      zh[`item.syn2.${category}.${colorTier}.name`] = `${adjective.zh}${CATEGORY_ZH[category]}`;
+      en[`item.syn2.${category}.${colorTier}.name`] = `${adjective.en} ${CATEGORY_EN[category]}`;
+    }
+  }
+  return { zh, en };
+}
+
+const NAMED_ITEM_NAMES: Record<string, { zh: string; en: string }> = {
+  "named.golden-koi-statue": { zh: "金色锦鲤雕像", en: "Golden Koi Statue" },
+  "named.pendragon-model": { zh: "潘德拉贡模型", en: "Pendragon Model" },
+  "named.eternal-heart": { zh: "永恒之心", en: "Eternal Heart" },
+  "named.antique-suitcase": { zh: "复古手提箱", en: "Antique Suitcase" },
+  "named.unknown-access-card": { zh: "未知门禁卡", en: "Unknown Access Card" },
+  "named.white-dragon-king": { zh: "白龙王", en: "White Dragon King" },
+  "named.kokoro-rider-l1": { zh: "心跳骑士 L1", en: "Kokoro Rider L1" },
+  "named.kokoro-rider-l2": { zh: "心跳骑士 L2", en: "Kokoro Rider L2" },
+  "named.kokoro-rider-l3": { zh: "心跳骑士 L3", en: "Kokoro Rider L3" },
+  "named.broken-hilt": { zh: "破损剑柄", en: "Broken Hilt" },
+  "named.tayge-air-freshener": { zh: "特格空气清新剂", en: "Tayge Air Freshener" },
+};
+
+function namedItemNames(): { zh: LocaleDict; en: LocaleDict } {
+  const zh: LocaleDict = {};
+  const en: LocaleDict = {};
+  for (const named of NAMED_ITEMS_V2) {
+    const names = NAMED_ITEM_NAMES[named.id];
+    if (!names) throw new Error(`missing locale name for ${named.id}`);
+    zh[`item.${named.id}.name`] = names.zh;
+    en[`item.${named.id}.name`] = names.en;
+  }
+  return { zh, en };
+}
+
 const items = itemNames();
+const itemsV2 = itemNamesV2();
+const namedItems = namedItemNames();
 
 export const ZH_CN: LocaleDict = {
   ...items.zh,
+  ...itemsV2.zh,
+  ...namedItems.zh,
+  "colorTier.white": "白",
+  "colorTier.green": "绿",
+  "colorTier.blue": "蓝",
+  "colorTier.purple": "紫",
+  "colorTier.gold": "金",
+  "colorTier.red": "红",
   "app.title": "奇局",
   "app.tagline": "四席密封竞价：隔着有限情报为整包拍品估值。",
   "home.playVsAi": "对战 AI",
@@ -100,6 +177,9 @@ export const ZH_CN: LocaleDict = {
   "board.dimensions": "尺寸",
   "board.unknown": "未知",
   "board.lookupInCatalog": "在图鉴中反查",
+  "board.openFullCatalog": "📖 在完整图鉴中打开",
+  "board.candidatesTitle": "推断候选",
+  "board.colorTier": "品级色",
   "hud.estimatedValue": "预估总值",
   "hud.estimatedHint": "该数值基于当前已知线索计算的保守下界；实际总值可能因隐藏大件而更高。",
   "hud.round": "回合 {round}",
@@ -179,6 +259,14 @@ export const ZH_CN: LocaleDict = {
 
 export const EN: LocaleDict = {
   ...items.en,
+  ...itemsV2.en,
+  ...namedItems.en,
+  "colorTier.white": "White",
+  "colorTier.green": "Green",
+  "colorTier.blue": "Blue",
+  "colorTier.purple": "Purple",
+  "colorTier.gold": "Gold",
+  "colorTier.red": "Red",
   "app.title": "Qiju",
   "app.tagline": "A four-seat sealed-bid auction: value the lot through a veil of partial intel.",
   "home.playVsAi": "Play vs AI",
@@ -258,6 +346,9 @@ export const EN: LocaleDict = {
   "board.dimensions": "Size",
   "board.unknown": "unknown",
   "board.lookupInCatalog": "Look up in catalog",
+  "board.openFullCatalog": "📖 Open in full catalog",
+  "board.candidatesTitle": "Inferred candidates",
+  "board.colorTier": "Rarity",
   "hud.estimatedValue": "Estimated value",
   "hud.estimatedHint": "Conservative lower bound from currently known clues; the true total may be higher if large pieces remain hidden.",
   "hud.round": "Round {round}",

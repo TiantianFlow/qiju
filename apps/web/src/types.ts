@@ -121,6 +121,7 @@ export interface CatalogItem {
   value: number;
   footprint: { width: number; height: number };
   shapeId: string;
+  colorTier?: string;
 }
 
 export interface MatchView {

@@ -1,4 +1,4 @@
-import type { MatchView, Strings } from "../types";
+import type { CatalogItem, MatchView, Strings } from "../types";
 import { t } from "../i18n";
 import { LotBoardView } from "../components/LotBoard";
 
@@ -6,10 +6,12 @@ export function ResultPage({
   strings,
   view,
   onRestart,
+  catalog,
 }: {
   strings: Strings;
   view: MatchView;
   onRestart: () => void;
+  catalog?: CatalogItem[];
 }) {
   const result = view.result;
   if (!result) return null;
@@ -51,7 +53,7 @@ export function ResultPage({
       {view.board ? (
         <section data-testid="result-board">
           <h3>{t(strings, "result.lotBoard")}</h3>
-          <LotBoardView strings={strings} board={view.board} />
+          <LotBoardView strings={strings} board={view.board} catalog={catalog} />
         </section>
       ) : null}
       <section>

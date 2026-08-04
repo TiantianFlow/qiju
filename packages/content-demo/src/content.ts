@@ -1,6 +1,7 @@
 import type {
   AnalystDef,
   CategoryId,
+  ColorTierId,
   ContentSyntheticV0,
   ContentSyntheticV1,
   ContentSyntheticV2,
@@ -13,6 +14,7 @@ import type {
   TierId,
   ToolPackageDef,
 } from "@qiju/game-core";
+import { rectangularShapeId } from "@qiju/game-core";
 
 export const CATEGORY_ORDER: readonly CategoryId[] = [
   "artifact",
@@ -423,22 +425,209 @@ export function footprintForV2(tier: TierId, categoryIndex: number): { width: nu
   return { width, height };
 }
 
+/**
+ * High-variance rarity color bands (Round-5). Ranges intentionally overlap
+ * (e.g. gold ceiling vs red floor): color is a flavor/rarity badge, not a
+ * strict value bucket — named items may deliberately sit outside their
+ * band's typical range as an in-fiction bluff (see NAMED_ITEMS_V2).
+ */
+const COLOR_BANDS: Record<ColorTierId, { min: number; max: number }> = {
+  white: { min: 1_000, max: 4_000 },
+  green: { min: 3_000, max: 12_000 },
+  blue: { min: 10_000, max: 45_000 },
+  purple: { min: 50_000, max: 250_000 },
+  gold: { min: 300_000, max: 1_800_000 },
+  red: { min: 500_000, max: 22_668_888 },
+};
+
+function roundNice(value: number): number {
+  if (value < 10_000) return Math.round(value / 10) * 10;
+  if (value < 100_000) return Math.round(value / 100) * 100;
+  if (value < 1_000_000) return Math.round(value / 1_000) * 1_000;
+  return Math.round(value / 10_000) * 10_000;
+}
+
+/** Deterministic, monotonic-in-category value spread across a color band. */
+function bandValue(min: number, max: number, index: number, count: number): number {
+  const span = max - min;
+  const raw = min + Math.floor((span * (index + 1)) / (count + 1));
+  return roundNice(raw);
+}
+
+/**
+ * Procedural color→mechanical-tier mapping. White+green both draw from the
+ * "documented" weight bucket (common junk, thousands range); blue is
+ * "scarce"; purple is "exceptional"; gold is "singular" alongside the named
+ * red legendaries. This keeps the existing 4-bucket draw-weight/analyst
+ * mechanics untouched while the 6-color badge rides on top as presentation.
+ */
+const PROCEDURAL_COLOR_TIERS: ReadonlyArray<{
+  colorTier: ColorTierId;
+  tier: TierId;
+  footprintOffset: number;
+}> = [
+  { colorTier: "white", tier: "documented", footprintOffset: 0 },
+  { colorTier: "green", tier: "documented", footprintOffset: 1 },
+  { colorTier: "blue", tier: "scarce", footprintOffset: 0 },
+  { colorTier: "purple", tier: "exceptional", footprintOffset: 0 },
+  { colorTier: "gold", tier: "singular", footprintOffset: 0 },
+];
+
+export interface NamedItemDef {
+  id: string;
+  category: CategoryId;
+  tier: TierId;
+  colorTier: ColorTierId;
+  width: number;
+  height: number;
+  value: number;
+}
+
+/**
+ * Recreated famous high-variance collectibles. All footprints stay within
+ * the 1-5 rectangle bound enforced by the v2 layout/test invariants. Several
+ * "red" (mythic) items are deliberately valued well below red's typical band
+ * floor (Unknown Access Card, White Dragon King) — the color badge signals
+ * rarity/lore, not a value guarantee, which is the point of the bluff.
+ */
+export const NAMED_ITEMS_V2: readonly NamedItemDef[] = [
+  {
+    id: "named.golden-koi-statue",
+    category: "artifact",
+    tier: "singular",
+    colorTier: "red",
+    width: 4,
+    height: 5,
+    value: 22_668_888,
+  },
+  {
+    id: "named.pendragon-model",
+    category: "mechanism",
+    tier: "singular",
+    colorTier: "red",
+    width: 4,
+    height: 5,
+    value: 20_171_210,
+  },
+  {
+    id: "named.eternal-heart",
+    category: "anomaly",
+    tier: "singular",
+    colorTier: "red",
+    width: 1,
+    height: 1,
+    value: 1_314_520,
+  },
+  {
+    id: "named.antique-suitcase",
+    category: "ephemera",
+    tier: "singular",
+    colorTier: "red",
+    width: 3,
+    height: 3,
+    value: 577_777,
+  },
+  {
+    id: "named.unknown-access-card",
+    category: "mechanism",
+    tier: "singular",
+    colorTier: "red",
+    width: 1,
+    height: 2,
+    value: 366_112,
+  },
+  {
+    id: "named.white-dragon-king",
+    category: "artifact",
+    tier: "singular",
+    colorTier: "red",
+    width: 3,
+    height: 4,
+    value: 300_000,
+  },
+  {
+    id: "named.kokoro-rider-l1",
+    category: "mechanism",
+    tier: "documented",
+    colorTier: "green",
+    width: 1,
+    height: 2,
+    value: 2_400,
+  },
+  {
+    id: "named.kokoro-rider-l2",
+    category: "mechanism",
+    tier: "documented",
+    colorTier: "green",
+    width: 2,
+    height: 2,
+    value: 2_800,
+  },
+  {
+    id: "named.kokoro-rider-l3",
+    category: "mechanism",
+    tier: "documented",
+    colorTier: "blue",
+    width: 2,
+    height: 2,
+    value: 3_232,
+  },
+  {
+    id: "named.broken-hilt",
+    category: "artifact",
+    tier: "documented",
+    colorTier: "green",
+    width: 1,
+    height: 3,
+    value: 2_139,
+  },
+  {
+    id: "named.tayge-air-freshener",
+    category: "ephemera",
+    tier: "documented",
+    colorTier: "blue",
+    width: 1,
+    height: 2,
+    value: 1_795,
+  },
+];
+
+/**
+ * High-variance v2 catalog: 5 procedural color variants per category
+ * (white/green/blue/purple/gold, 30 items) plus 11 recreated named
+ * collectibles (6 red legendaries + 5 small flavor pieces) = 41 items.
+ * Kept separate from `buildCatalog()` (v0/v1, frozen table + tests).
+ */
 export function buildCatalogV2(): ItemDef[] {
   const catalog: ItemDef[] = [];
   CATEGORY_ORDER.forEach((category, ci) => {
-    for (const tier of TIER_ORDER) {
-      const footprint = footprintForV2(tier, ci);
+    for (const { colorTier, tier, footprintOffset } of PROCEDURAL_COLOR_TIERS) {
+      const band = COLOR_BANDS[colorTier]!;
+      const footprint = footprintForV2(tier, ci + footprintOffset);
       catalog.push({
-        id: `syn.${category}.${tier}` as ItemId,
-        nameKey: `item.syn.${category}.${tier}.name`,
+        id: `syn2.${category}.${colorTier}` as ItemId,
+        nameKey: `item.syn2.${category}.${colorTier}.name`,
         category,
         tier,
-        shapeId: `rect.${footprint.width}x${footprint.height}` as ItemDef["shapeId"],
-        value: computeValue(tier, category),
+        colorTier,
+        shapeId: rectangularShapeId(footprint.width, footprint.height),
+        value: bandValue(band.min, band.max, ci, CATEGORY_ORDER.length),
         footprint,
       });
     }
   });
+  for (const named of NAMED_ITEMS_V2) {
+    catalog.push({
+      id: named.id as ItemId,
+      nameKey: `item.${named.id}.name`,
+      category: named.category,
+      tier: named.tier,
+      colorTier: named.colorTier,
+      shapeId: rectangularShapeId(named.width, named.height),
+      value: named.value,
+      footprint: { width: named.width, height: named.height },
+    });
+  }
   return catalog;
 }
 
@@ -457,7 +646,9 @@ export function buildContentSyntheticV2(): ContentSyntheticV2 {
       themeBoostFactor: 3,
       countMin: 8,
       countMax: 12,
-      board: { width: 10, height: 10, maxAttempts: 64 },
+      // Tall gallery board (Slice 2): generous cell budget for rare multi-legendary
+      // draws (worst case ~105 cells) plus a scrollable "long showcase" viewport.
+      board: { width: 10, height: 20, maxAttempts: 64 },
     },
     publicIntelPool: buildPublicIntelPoolV1(),
     analysts: buildAnalysts(),

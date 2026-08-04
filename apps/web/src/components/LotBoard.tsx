@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { LotBoard, RevealedObject, Strings } from "../types";
+import type { CatalogItem, LotBoard, RevealedObject, Strings } from "../types";
 import { t } from "../i18n";
 
 const TIER_CLASS: Record<string, string> = {
@@ -16,6 +16,15 @@ const TIER_MARK: Record<string, string> = {
   singular: "★",
 };
 
+const COLOR_TIER_CLASS: Record<string, string> = {
+  white: "color-white",
+  green: "color-green",
+  blue: "color-blue",
+  purple: "color-purple",
+  gold: "color-gold",
+  red: "color-red",
+};
+
 interface PlacedObject {
   object: RevealedObject;
   x: number;
@@ -28,12 +37,14 @@ interface PlacedObject {
 export function LotBoardView({
   strings,
   board,
+  catalog,
   focusRevealId,
   onFocusHandled,
   onCatalogLookup,
 }: {
   strings: Strings;
   board: LotBoard;
+  catalog?: CatalogItem[] | undefined;
   focusRevealId?: string | undefined;
   onFocusHandled?: (() => void) | undefined;
   onCatalogLookup?: ((prefill: { width?: number; height?: number; tier?: string }) => void) | undefined;
@@ -41,12 +52,19 @@ export function LotBoardView({
   const [recentlyRevealed, setRecentlyRevealed] = useState<Set<string>>(new Set());
   const [focused, setFocused] = useState<string | null>(focusRevealId ?? null);
   const cardRefs = useRef(new Map<string, HTMLButtonElement>());
+  const detailRef = useRef<HTMLElement | null>(null);
 
   const objectsById = useMemo(() => {
     const map = new Map<string, RevealedObject>();
     for (const obj of board.revealedObjects) map.set(obj.revealId, obj);
     return map;
   }, [board.revealedObjects]);
+
+  const catalogById = useMemo(() => {
+    const map = new Map<string, CatalogItem>();
+    for (const item of catalog ?? []) map.set(item.id, item);
+    return map;
+  }, [catalog]);
 
   const placed = useMemo<PlacedObject[]>(() => {
     const out: PlacedObject[] = [];
@@ -96,75 +114,148 @@ export function LotBoardView({
   }, [focusRevealId, onFocusHandled]);
 
   const focusedObject = focused ? objectsById.get(focused) : undefined;
+  const focusedCatalogItem = focusedObject?.identity ? catalogById.get(focusedObject.identity) : undefined;
+
+  const toggleFocus = (revealId: string) => {
+    setFocused((prev) => (prev === revealId ? null : revealId));
+  };
+
+  const closeDetail = (returnId?: string) => {
+    setFocused(null);
+    if (returnId) {
+      requestAnimationFrame(() => {
+        cardRefs.current.get(returnId)?.focus();
+      });
+    }
+  };
+
+  // "Click outside closes it": object-card clicks manage their own
+  // toggle/switch, so this only needs to close when the click lands truly
+  // outside both the drawer and any board card.
+  useEffect(() => {
+    if (!focused) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (detailRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest(".object-card")) return;
+      setFocused(null);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [focused]);
 
   return (
+    <>
     <div className="lot-board-wrap">
-      <div
-        className="lot-board"
-        role="grid"
-        aria-label={t(strings, "board.ariaLabel")}
-        data-testid="lot-board"
-        style={{ "--board-w": board.width, "--board-h": board.height } as React.CSSProperties}
-      >
-        {Array.from({ length: board.width * board.height }, (_, i) => (
-          <div
-            key={i}
-            className="board-cell concealed"
-            aria-hidden="true"
-            data-testid={`bg-${i % board.width}-${Math.floor(i / board.width)}`}
-          />
-        ))}
-        {placed.map(({ object, x, y, width, height, anchorOnly }) => {
-          const classes = ["object-card"];
-          if (anchorOnly) classes.push("anchor-only");
-          if (object.tier) classes.push(TIER_CLASS[object.tier] ?? "");
-          if (object.identity) classes.push("identity-known");
-          if (recentlyRevealed.has(object.revealId)) classes.push("flash");
-          if (focused === object.revealId) classes.push("focused");
-          return (
-            <button
-              key={object.revealId}
-              ref={(el) => {
-                if (el) cardRefs.current.set(object.revealId, el);
-                else cardRefs.current.delete(object.revealId);
-              }}
-              type="button"
-              role="gridcell"
-              className={classes.join(" ")}
-              style={
-                {
-                  gridColumn: `${x + 1} / span ${width}`,
-                  gridRow: `${y + 1} / span ${height}`,
-                  "--obj-w": width,
-                  "--obj-h": height,
-                } as React.CSSProperties
-              }
-              aria-label={t(strings, "board.cell.revealed", { detail: describeObject(strings, object) })}
-              data-testid={`object-${object.revealId}`}
-              data-width={anchorOnly ? undefined : width}
-              data-height={anchorOnly ? undefined : height}
-              onClick={() => setFocused(object.revealId)}
-            >
-              {object.tier ? (
-                <span className="tier-mark" aria-hidden="true">
-                  {TIER_MARK[object.tier] ?? "?"}
-                </span>
-              ) : null}
-              {object.category && !object.identity && !object.tier ? (
-                <span className="object-category">{t(strings, `category.${object.category}`)}</span>
-              ) : null}
-              {object.identity ? (
-                <span className="object-name">{t(strings, `item.${object.identity}.name`)}</span>
-              ) : null}
-              {object.exactValue !== undefined && !object.identity ? (
-                <span className="object-value">{object.exactValue}</span>
-              ) : null}
-            </button>
-          );
-        })}
+      {/* Slice 2: locally scrollable long showcase — the full board extent
+          (and thus a rough upper bound on total lot size) is never fully
+          visible at a glance; objects cluster densely near the top rows. */}
+      <div className="lot-board-viewport" data-testid="lot-board-viewport">
+        <div
+          className="lot-board"
+          role="grid"
+          aria-label={t(strings, "board.ariaLabel")}
+          data-testid="lot-board"
+          style={{ "--board-w": board.width, "--board-h": board.height } as React.CSSProperties}
+        >
+          {Array.from({ length: board.width * board.height }, (_, i) => (
+            <div
+              key={i}
+              className="board-cell concealed"
+              aria-hidden="true"
+              data-testid={`bg-${i % board.width}-${Math.floor(i / board.width)}`}
+            />
+          ))}
+          {placed.map(({ object, x, y, width, height, anchorOnly }) => {
+            const catalogItem = object.identity ? catalogById.get(object.identity) : undefined;
+            const classes = ["object-card"];
+            if (anchorOnly) classes.push("anchor-only");
+            if (object.tier) classes.push(TIER_CLASS[object.tier] ?? "");
+            if (catalogItem?.colorTier) classes.push(COLOR_TIER_CLASS[catalogItem.colorTier] ?? "");
+            if (object.identity) classes.push("identity-known");
+            if (recentlyRevealed.has(object.revealId)) classes.push("flash");
+            if (focused === object.revealId) classes.push("focused");
+            return (
+              <button
+                key={object.revealId}
+                ref={(el) => {
+                  if (el) cardRefs.current.set(object.revealId, el);
+                  else cardRefs.current.delete(object.revealId);
+                }}
+                type="button"
+                role="gridcell"
+                aria-pressed={focused === object.revealId}
+                className={classes.join(" ")}
+                style={
+                  {
+                    gridColumn: `${x + 1} / span ${width}`,
+                    gridRow: `${y + 1} / span ${height}`,
+                    "--obj-w": width,
+                    "--obj-h": height,
+                  } as React.CSSProperties
+                }
+                aria-label={t(strings, "board.cell.revealed", { detail: describeObject(strings, object) })}
+                data-testid={`object-${object.revealId}`}
+                data-width={anchorOnly ? undefined : width}
+                data-height={anchorOnly ? undefined : height}
+                onClick={() => toggleFocus(object.revealId)}
+              >
+                {object.tier ? (
+                  <span className="tier-mark" aria-hidden="true">
+                    {TIER_MARK[object.tier] ?? "?"}
+                  </span>
+                ) : null}
+                {object.category && !object.identity && !object.tier ? (
+                  <span className="object-category">{t(strings, `category.${object.category}`)}</span>
+                ) : null}
+                {object.identity ? (
+                  <span className="object-name">{t(strings, `item.${object.identity}.name`)}</span>
+                ) : null}
+                {object.exactValue !== undefined && !object.identity ? (
+                  <span className="object-value">{object.exactValue}</span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
       </div>
-      {focusedObject ? (
-        <aside className="object-detail" data-testid="object-detail" aria-live="polite">
+      {board.aggregateFacts.length > 0 ? (
+        <ul className="aggregate-facts" aria-label={t(strings, "board.aggregates")}>
+          {board.aggregateFacts.map((fact, i) => (
+            <li key={`${fact.dimension}-${fact.key}-${fact.round}-${i}`}>
+              {fact.metric === "count" && fact.dimension === "tier"
+                ? t(strings, "intel.aggregate.countTier", {
+                    key: t(strings, `tier.${fact.key}`),
+                    value: fact.value,
+                  })
+                : fact.metric === "count"
+                  ? t(strings, "intel.aggregate.count", {
+                      key: t(strings, `category.${fact.key}`),
+                      value: fact.value,
+                    })
+                  : t(strings, "intel.aggregate.mean", {
+                      key: t(strings, `category.${fact.key}`),
+                      value: fact.value,
+                    })}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+    {focusedObject ? (
+      <div className="object-detail-overlay" data-testid="object-detail-overlay">
+        {/*
+          Slice 4: true overlay — fixed-position, never compresses or pushes the
+          board/console. The backdrop is decorative-only (pointer-events: none):
+          it dims/blurs everything including the board, but clicks pass straight
+          through it so board cards stay directly clickable underneath (toggle
+          the same card off, or switch straight to a different card). Closing
+          on an actual "click outside" is handled by the document listener
+          below instead of an intercepting backdrop button.
+        */}
+        <div className="object-detail-backdrop" data-testid="object-detail-backdrop" aria-hidden="true" />
+        <aside ref={detailRef} className="object-detail" data-testid="object-detail" aria-live="polite">
           <header>
             <strong>
               {focusedObject.identity
@@ -172,19 +263,21 @@ export function LotBoardView({
                 : t(strings, "board.unidentified")}
             </strong>
             <button
-              onClick={() => {
-                const returnId = focusedObject.revealId;
-                setFocused(null);
-                requestAnimationFrame(() => {
-                  cardRefs.current.get(returnId)?.focus();
-                });
-              }}
+              onClick={() => closeDetail(focusedObject.revealId)}
               aria-label={t(strings, "board.closeDetail")}
               data-testid="object-detail-close"
             >
               ×
             </button>
           </header>
+          {focusedCatalogItem?.colorTier ? (
+            <span
+              className={`color-chip ${COLOR_TIER_CLASS[focusedCatalogItem.colorTier] ?? ""}`}
+              data-testid="object-detail-color-chip"
+            >
+              {t(strings, `colorTier.${focusedCatalogItem.colorTier}`)}
+            </span>
+          ) : null}
           <dl>
             {focusedObject.cells ? (
               <>
@@ -214,6 +307,30 @@ export function LotBoardView({
                   : t(strings, "board.unknown")}
             </dd>
           </dl>
+          {!focusedObject.identity &&
+          focusedObject.candidateSummary &&
+          focusedObject.candidateSummary.candidateIds.length > 0 &&
+          catalogById.size > 0 ? (
+            <section className="candidate-list" data-testid="candidate-list">
+              <h4>{t(strings, "board.candidatesTitle")}</h4>
+              <ul>
+                {focusedObject.candidateSummary.candidateIds
+                  .map((id) => catalogById.get(id))
+                  .filter((item): item is CatalogItem => item !== undefined)
+                  .sort((a, b) => a.value - b.value)
+                  .map((item) => (
+                    <li key={item.id} data-testid={`candidate-${item.id}`}>
+                      <span className={`color-chip ${COLOR_TIER_CLASS[item.colorTier ?? ""] ?? ""}`}>
+                        {item.colorTier ? t(strings, `colorTier.${item.colorTier}`) : t(strings, `tier.${item.tier}`)}
+                      </span>
+                      <span className="candidate-name">{t(strings, `item.${item.id}.name`)}</span>
+                      <span className="candidate-category">{t(strings, `category.${item.category}`)}</span>
+                      <span className="candidate-value">{item.value.toLocaleString()}</span>
+                    </li>
+                  ))}
+              </ul>
+            </section>
+          ) : null}
           {(focusedObject.cells || focusedObject.tier) && onCatalogLookup ? (
             <button
               type="button"
@@ -227,34 +344,13 @@ export function LotBoardView({
                 });
               }}
             >
-              {t(strings, "board.lookupInCatalog")}
+              {t(strings, "board.openFullCatalog")}
             </button>
           ) : null}
         </aside>
-      ) : null}
-      {board.aggregateFacts.length > 0 ? (
-        <ul className="aggregate-facts" aria-label={t(strings, "board.aggregates")}>
-          {board.aggregateFacts.map((fact, i) => (
-            <li key={`${fact.dimension}-${fact.key}-${fact.round}-${i}`}>
-              {fact.metric === "count" && fact.dimension === "tier"
-                ? t(strings, "intel.aggregate.countTier", {
-                    key: t(strings, `tier.${fact.key}`),
-                    value: fact.value,
-                  })
-                : fact.metric === "count"
-                  ? t(strings, "intel.aggregate.count", {
-                      key: t(strings, `category.${fact.key}`),
-                      value: fact.value,
-                    })
-                  : t(strings, "intel.aggregate.mean", {
-                      key: t(strings, `category.${fact.key}`),
-                      value: fact.value,
-                    })}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
+      </div>
+    ) : null}
+    </>
   );
 }
 

@@ -220,6 +220,7 @@ export function TablePage({
             <LotBoardView
               strings={strings}
               board={view.board}
+              catalog={catalog}
               focusRevealId={focusRevealId}
               onFocusHandled={() => setFocusRevealId(undefined)}
               onCatalogLookup={(prefill) => openCatalog(prefill)}

@@ -62,7 +62,8 @@ describe("server integration", () => {
     const zhKeys = Object.keys(zhBody.strings).sort();
     const enKeys = Object.keys(enBody.strings).sort();
     expect(zhKeys).toEqual(enKeys);
-    expect(zhBody.catalog.length).toBe(24);
-    expect(enBody.catalog.length).toBe(24);
+    // v2's Round-5 high-variance catalog: 30 procedural color variants + 11 named collectibles.
+    expect(zhBody.catalog.length).toBe(41);
+    expect(enBody.catalog.length).toBe(41);
   });
 });

@@ -120,7 +120,7 @@ export function App() {
       {view.phase === "setup" && !isObserver ? (
         <SetupPage strings={strings} view={view} connection={connection} />
       ) : view.phase === "completed" ? (
-        <ResultPage strings={strings} view={view} onRestart={goHome} />
+        <ResultPage strings={strings} view={view} onRestart={goHome} catalog={catalog} />
       ) : (
         <TablePage
           strings={strings}

@@ -199,6 +199,7 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
       value: item.value,
       footprint: item.footprint ?? { width: 1, height: 1 },
       shapeId: item.shapeId,
+      ...(item.colorTier ? { colorTier: item.colorTier } : {}),
     }));
     return { locale, strings: runtime.locale[locale], contentHash: runtime.contentHash, catalog };
   });
