@@ -114,6 +114,15 @@ export interface LegalActionView {
   max?: number;
 }
 
+export interface CatalogItem {
+  id: string;
+  tier: string;
+  category: string;
+  value: number;
+  footprint: { width: number; height: number };
+  shapeId: string;
+}
+
 export interface MatchView {
   viewer: string;
   matchId: string;
@@ -123,6 +132,7 @@ export interface MatchView {
   ruleBundleId: string;
   contentBundleId: string;
   startingBudget: number;
+  estimatedValue: number;
   slots: SlotView[];
   board?: LotBoard;
   publicIntel: IntelRecordView[];

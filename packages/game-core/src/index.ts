@@ -15,3 +15,4 @@ export {
   executeSelector,
   registerShapes,
 } from "./engine.js";
+export { estimateConservativeValue, tierFloor, cellFloor } from "./valuation.js";

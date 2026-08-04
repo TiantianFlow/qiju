@@ -57,8 +57,12 @@ describe("server integration", () => {
     const en = await app.inject({ method: "GET", url: "/api/v1/content/content.synthetic.v2/en" });
     expect(zh.statusCode).toBe(200);
     expect(en.statusCode).toBe(200);
-    const zhKeys = Object.keys((zh.json() as { strings: Record<string, string> }).strings).sort();
-    const enKeys = Object.keys((en.json() as { strings: Record<string, string> }).strings).sort();
+    const zhBody = zh.json() as { strings: Record<string, string>; catalog: Array<{ id: string }> };
+    const enBody = en.json() as { strings: Record<string, string>; catalog: Array<{ id: string }> };
+    const zhKeys = Object.keys(zhBody.strings).sort();
+    const enKeys = Object.keys(enBody.strings).sort();
     expect(zhKeys).toEqual(enKeys);
+    expect(zhBody.catalog.length).toBe(24);
+    expect(enBody.catalog.length).toBe(24);
   });
 });

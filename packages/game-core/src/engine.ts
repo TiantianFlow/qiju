@@ -1,3 +1,4 @@
+import { estimateConservativeValue } from "./valuation.js";
 import { canonicalHash } from "./prng-hash.js";
 import { Xoshiro128StarStar, deriveStreamSeed } from "./prng.js";
 import type {
@@ -1411,6 +1412,7 @@ function projectView(
 
   const board = projectBoard(runtime, state, viewer, knowledge);
   const publicEvents = projectPublicEvents(state);
+  const estimatedValue = estimateConservativeValue(runtime, state, knowledge);
 
   return {
     viewer,
@@ -1421,6 +1423,7 @@ function projectView(
     ruleBundleId: state.ruleManifest.ruleBundleId,
     contentBundleId: state.ruleManifest.contentBundleId,
     startingBudget: runtime.config.startingBudget,
+    estimatedValue,
     slots,
     ...(board ? { board } : {}),
     publicIntel,

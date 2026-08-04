@@ -378,6 +378,8 @@ export interface PublicView {
   ruleBundleId: string;
   contentBundleId: string;
   startingBudget: number;
+  /** Conservative lower-bound lot value from legally visible clues only. */
+  estimatedValue: number;
   slots: SlotPublicView[];
   board?: LotBoardView;
   publicIntel: PublicIntelRecordView[];

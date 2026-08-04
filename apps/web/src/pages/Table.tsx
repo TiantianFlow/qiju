@@ -1,9 +1,14 @@
 import { useState } from "react";
-import type { IntelRecordView, MatchView, PublicEvent, Strings } from "../types";
+import type { CatalogItem, IntelRecordView, MatchView, PublicEvent, Strings } from "../types";
 import type { MatchConnection } from "../connection";
 import { t } from "../i18n";
 import { SlotCard } from "../components/SlotCard";
 import { LotBoardView } from "../components/LotBoard";
+import { EstimatedValueHUD } from "../components/EstimatedValueHUD";
+import {
+  CandidateCatalogModal,
+  type CatalogFilterPrefill,
+} from "../components/CandidateCatalogModal";
 import { useCountdown } from "../hooks";
 
 function formatShapeId(shapeId: string | undefined): string {
@@ -140,15 +145,19 @@ export function TablePage({
   connection,
   isObserver,
   seed,
+  catalog,
 }: {
   strings: Strings;
   view: MatchView;
   connection: MatchConnection;
   isObserver: boolean;
   seed: string | null;
+  catalog: CatalogItem[];
 }) {
   const [bidInput, setBidInput] = useState("");
   const [focusRevealId, setFocusRevealId] = useState<string | undefined>(undefined);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [catalogPrefill, setCatalogPrefill] = useState<CatalogFilterPrefill | null>(null);
   const remaining = useCountdown(connection.deadlineAtMs);
   const my = view.mySeat;
   const window = view.window;
@@ -168,22 +177,25 @@ export function TablePage({
     connection.sendCommand({ type: "submit_bid", amount, actionWindowId: window.actionWindowId });
   };
 
+  const openCatalog = (prefill?: CatalogFilterPrefill) => {
+    setCatalogPrefill(prefill ?? null);
+    setCatalogOpen(true);
+  };
+
   return (
-    <main className="table">
-      <header className="table-head">
-        <h2>
-          {view.phase === "tiebreak"
-            ? t(strings, "table.tiebreak")
-            : t(strings, "table.round", { round: view.round })}
-        </h2>
+    <main className="table immersive-table" data-testid="immersive-table">
+      <EstimatedValueHUD
+        strings={strings}
+        round={view.round}
+        phase={view.phase}
+        estimatedValue={view.estimatedValue ?? 0}
+        remainingSeconds={remaining}
+      />
+
+      <div className="table-toolbar">
         {isObserver && connection.demo.presentation ? (
           <span className="presentation" data-testid="presentation">
             {t(strings, `presentation.${connection.demo.presentation.kind}`)}
-          </span>
-        ) : null}
-        {remaining !== null ? (
-          <span className="deadline" role="timer" data-testid="deadline">
-            {t(strings, "table.deadline", { seconds: remaining })}
           </span>
         ) : null}
         {isObserver && seed ? (
@@ -191,7 +203,10 @@ export function TablePage({
             {t(strings, "demo.seed")}: <code>{seed}</code>
           </span>
         ) : null}
-      </header>
+        <button type="button" data-testid="open-catalog" onClick={() => openCatalog()}>
+          {t(strings, "catalog.open")}
+        </button>
+      </div>
 
       {connection.lastRejection ? (
         <p role="alert" className="error">
@@ -199,156 +214,167 @@ export function TablePage({
         </p>
       ) : null}
 
-      {view.board ? (
-        <section className="auction-board" data-testid="auction-board">
-          <LotBoardView
-            strings={strings}
-            board={view.board}
-            focusRevealId={focusRevealId}
-            onFocusHandled={() => setFocusRevealId(undefined)}
-          />
-        </section>
-      ) : (
-        <section className="slots-grid">
-          {view.slots.map((slot) => (
-            <SlotCard key={slot.slotId} strings={strings} slot={slot} />
-          ))}
-        </section>
-      )}
-
-      <div className="table-columns">
-        <div>
-          {view.publicEvents && view.publicEvents.length > 0 ? (
-            <EventFeed
+      <div className="immersive-body">
+        {view.board ? (
+          <section className="auction-board" data-testid="auction-board">
+            <LotBoardView
               strings={strings}
-              events={view.publicEvents}
-              onFocusObject={(id) => setFocusRevealId(id)}
+              board={view.board}
+              focusRevealId={focusRevealId}
+              onFocusHandled={() => setFocusRevealId(undefined)}
+              onCatalogLookup={(prefill) => openCatalog(prefill)}
             />
-          ) : null}
-          <IntelList
-            strings={strings}
-            records={view.publicIntel}
-            title={t(strings, "intel.public.title")}
-            hideSlotIds={view.board !== undefined}
-          />
-          {my ? (
+          </section>
+        ) : (
+          <section className="slots-grid">
+            {view.slots.map((slot) => (
+              <SlotCard key={slot.slotId} strings={strings} slot={slot} />
+            ))}
+          </section>
+        )}
+
+        <div className="table-side">
+          <div className="table-side-scroll">
+            {view.publicEvents && view.publicEvents.length > 0 ? (
+              <EventFeed
+                strings={strings}
+                events={view.publicEvents}
+                onFocusObject={(id) => setFocusRevealId(id)}
+              />
+            ) : null}
             <IntelList
               strings={strings}
-              records={my.privateIntel}
-              title={t(strings, "intel.private.title")}
+              records={view.publicIntel}
+              title={t(strings, "intel.public.title")}
               hideSlotIds={view.board !== undefined}
             />
+            {my ? (
+              <IntelList
+                strings={strings}
+                records={my.privateIntel}
+                title={t(strings, "intel.private.title")}
+                hideSlotIds={view.board !== undefined}
+              />
+            ) : null}
+
+            <section className="history">
+              <h4>{t(strings, "table.history")}</h4>
+              {view.reveals.length === 0 ? (
+                <p>{t(strings, "table.noHistory")}</p>
+              ) : (
+                <table>
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      {["seat1", "seat2", "seat3", "seat4"].map((s) => (
+                        <th key={s}>{s}</th>
+                      ))}
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {view.reveals.map((reveal) => (
+                      <tr key={`${reveal.kind}-${reveal.round}`}>
+                        <td>{reveal.kind === "tiebreak" ? "TB" : reveal.round}</td>
+                        {["seat1", "seat2", "seat3", "seat4"].map((s) => (
+                          <td key={s}>{reveal.bids[s] ?? "—"}</td>
+                        ))}
+                        <td>
+                          {reveal.outcome === "sold"
+                            ? t(strings, "reveal.sold", {
+                                seat: reveal.buyerSeatId ?? "?",
+                                amount: reveal.winningBid ?? 0,
+                              })
+                            : reveal.outcome === "continue"
+                              ? t(strings, "reveal.continue")
+                              : reveal.outcome === "tiebreak"
+                                ? t(strings, "reveal.tiebreak")
+                                : t(strings, "reveal.noSale")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </section>
+          </div>
+
+          {!isObserver && my ? (
+            <section className="actions bid-dock" aria-label="actions" data-testid="bid-dock">
+              {toolAction && toolAction.kind === "use_tool" && window ? (
+                <div className="tool-row">
+                  {toolAction.toolIds?.map((toolId) => (
+                    <button
+                      key={toolId}
+                      onClick={() =>
+                        connection.sendCommand({
+                          type: "use_tool",
+                          toolId,
+                          actionWindowId: window.actionWindowId,
+                        })
+                      }
+                      data-testid={`tool-${toolId}`}
+                    >
+                      {t(strings, `${toolId}.name`)}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {canBid ? (
+                <div className="bid-row">
+                  <label htmlFor="bid-input">{t(strings, "table.yourBid")}</label>
+                  <input
+                    id="bid-input"
+                    type="number"
+                    min={0}
+                    max={view.startingBudget}
+                    value={bidInput}
+                    onChange={(e) => setBidInput(e.target.value)}
+                    data-testid="bid-input"
+                  />
+                  <button
+                    onClick={() => submitBid(Math.max(0, Math.min(view.startingBudget, Number(bidInput) || 0)))}
+                    data-testid="submit-bid"
+                  >
+                    {t(strings, "table.submitBid")}
+                  </button>
+                  <button onClick={() => submitBid(0)} data-testid="pass-bid">
+                    {t(strings, "table.pass")}
+                  </button>
+                </div>
+              ) : null}
+              {my.currentBid !== undefined ? (
+                <p className="current-bid">
+                  {t(strings, "table.yourBid")}: <strong>{my.currentBid}</strong>
+                </p>
+              ) : null}
+              {canLock ? (
+                <button
+                  onClick={() =>
+                    window &&
+                    connection.sendCommand({
+                      type: "lock_bid",
+                      actionWindowId: window.actionWindowId,
+                    })
+                  }
+                  data-testid="lock-bid"
+                >
+                  {t(strings, "table.lockBid")}
+                </button>
+              ) : null}
+              {my.currentBidLocked ? <p>{t(strings, "table.waitingReveal")}</p> : null}
+            </section>
           ) : null}
         </div>
-
-        {!isObserver && my ? (
-          <section className="actions" aria-label="actions">
-            {toolAction && toolAction.kind === "use_tool" && window ? (
-              <div className="tool-row">
-                {toolAction.toolIds?.map((toolId) => (
-                  <button
-                    key={toolId}
-                    onClick={() =>
-                      connection.sendCommand({
-                        type: "use_tool",
-                        toolId,
-                        actionWindowId: window.actionWindowId,
-                      })
-                    }
-                    data-testid={`tool-${toolId}`}
-                  >
-                    {t(strings, `${toolId}.name`)}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {canBid ? (
-              <div className="bid-row">
-                <label htmlFor="bid-input">{t(strings, "table.yourBid")}</label>
-                <input
-                  id="bid-input"
-                  type="number"
-                  min={0}
-                  max={view.startingBudget}
-                  value={bidInput}
-                  onChange={(e) => setBidInput(e.target.value)}
-                  data-testid="bid-input"
-                />
-                <button
-                  onClick={() => submitBid(Math.max(0, Math.min(view.startingBudget, Number(bidInput) || 0)))}
-                  data-testid="submit-bid"
-                >
-                  {t(strings, "table.submitBid")}
-                </button>
-                <button onClick={() => submitBid(0)} data-testid="pass-bid">
-                  {t(strings, "table.pass")}
-                </button>
-              </div>
-            ) : null}
-            {my.currentBid !== undefined ? (
-              <p className="current-bid">
-                {t(strings, "table.yourBid")}: <strong>{my.currentBid}</strong>
-              </p>
-            ) : null}
-            {canLock ? (
-              <button
-                onClick={() =>
-                  window &&
-                  connection.sendCommand({
-                    type: "lock_bid",
-                    actionWindowId: window.actionWindowId,
-                  })
-                }
-                data-testid="lock-bid"
-              >
-                {t(strings, "table.lockBid")}
-              </button>
-            ) : null}
-            {my.currentBidLocked ? <p>{t(strings, "table.waitingReveal")}</p> : null}
-          </section>
-        ) : null}
       </div>
 
-      <section className="history">
-        <h4>{t(strings, "table.history")}</h4>
-        {view.reveals.length === 0 ? (
-          <p>{t(strings, "table.noHistory")}</p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>#</th>
-                {["seat1", "seat2", "seat3", "seat4"].map((s) => (
-                  <th key={s}>{s}</th>
-                ))}
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {view.reveals.map((reveal) => (
-                <tr key={`${reveal.kind}-${reveal.round}`}>
-                  <td>{reveal.kind === "tiebreak" ? "TB" : reveal.round}</td>
-                  {["seat1", "seat2", "seat3", "seat4"].map((s) => (
-                    <td key={s}>{reveal.bids[s] ?? "—"}</td>
-                  ))}
-                  <td>
-                    {reveal.outcome === "sold"
-                      ? t(strings, "reveal.sold", {
-                          seat: reveal.buyerSeatId ?? "?",
-                          amount: reveal.winningBid ?? 0,
-                        })
-                      : reveal.outcome === "continue"
-                        ? t(strings, "reveal.continue")
-                        : reveal.outcome === "tiebreak"
-                          ? t(strings, "reveal.tiebreak")
-                          : t(strings, "reveal.noSale")}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      <CandidateCatalogModal
+        strings={strings}
+        catalog={catalog}
+        open={catalogOpen}
+        onClose={() => setCatalogOpen(false)}
+        prefill={catalogPrefill}
+      />
     </main>
   );
 }

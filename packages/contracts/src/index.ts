@@ -83,6 +83,13 @@ export interface CapabilitiesResponse {
   persistence: "in-memory";
 }
 
+/** Player/observer match view fields (wire snapshot). Round-4 adds estimatedValue. */
+export interface MatchViewDto {
+  estimatedValue: number;
+  round: number;
+  phase: string;
+}
+
 export const BRAND = {
   productName: { "zh-CN": "奇局", en: "Qiju" },
 } as const;

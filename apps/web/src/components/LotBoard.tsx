@@ -30,11 +30,13 @@ export function LotBoardView({
   board,
   focusRevealId,
   onFocusHandled,
+  onCatalogLookup,
 }: {
   strings: Strings;
   board: LotBoard;
   focusRevealId?: string | undefined;
   onFocusHandled?: (() => void) | undefined;
+  onCatalogLookup?: ((prefill: { width?: number; height?: number; tier?: string }) => void) | undefined;
 }) {
   const [recentlyRevealed, setRecentlyRevealed] = useState<Set<string>>(new Set());
   const [focused, setFocused] = useState<string | null>(focusRevealId ?? null);
@@ -178,6 +180,7 @@ export function LotBoardView({
                 });
               }}
               aria-label={t(strings, "board.closeDetail")}
+              data-testid="object-detail-close"
             >
               ×
             </button>
@@ -211,6 +214,22 @@ export function LotBoardView({
                   : t(strings, "board.unknown")}
             </dd>
           </dl>
+          {(focusedObject.cells || focusedObject.tier) && onCatalogLookup ? (
+            <button
+              type="button"
+              className="catalog-lookup"
+              data-testid="catalog-lookup"
+              onClick={() => {
+                const dims = focusedObject.cells ? rectOf(focusedObject.cells) : undefined;
+                onCatalogLookup({
+                  ...(dims ? { width: dims.width, height: dims.height } : {}),
+                  ...(focusedObject.tier ? { tier: focusedObject.tier } : {}),
+                });
+              }}
+            >
+              {t(strings, "board.lookupInCatalog")}
+            </button>
+          ) : null}
         </aside>
       ) : null}
       {board.aggregateFacts.length > 0 ? (

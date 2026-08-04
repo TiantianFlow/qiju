@@ -453,6 +453,24 @@ describe("session runtime (in-memory, FakeClock)", () => {
     expect(completed.board!.revealedObjects).toHaveLength(lotSize);
   });
 
+  it("estimatedValue is present and non-decreasing across demo presentation frames", async () => {
+    const clock = new FakeClock(0);
+    const manager = createDemoManager(clock);
+    const { events } = collectEvents();
+    const room = manager.createAllAi({ matchId: "est-mono", seed: "e2e-demo-seed", events });
+    await room.initializeDemoToAuctionReady();
+    let prev = room.publicView().estimatedValue;
+    expect(typeof prev).toBe("number");
+    let guard = 0;
+    while (room.demoState.presentation?.kind !== "completed" && guard++ < 80) {
+      await room.demoStep();
+      const next = room.publicView().estimatedValue;
+      expect(next).toBeGreaterThanOrEqual(prev);
+      prev = next;
+    }
+    expect(room.publicView().estimatedValue).toBeGreaterThan(0);
+  });
+
   it("step consumes multiple internal actions when needed but yields one checkpoint", async () => {
     const clock = new FakeClock(0);
     const manager = createDemoManager(clock);

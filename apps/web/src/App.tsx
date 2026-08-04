@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Locale, Strings } from "./types";
+import type { CatalogItem, Locale, Strings } from "./types";
 import { detectLocale, t } from "./i18n";
 import { MatchConnection } from "./connection";
 import { useConnection } from "./hooks";
@@ -18,6 +18,7 @@ interface ActiveMatch {
 export function App() {
   const [locale, setLocale] = useState<Locale>(() => detectLocale());
   const [strings, setStrings] = useState<Strings>({});
+  const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [productName, setProductName] = useState({ "zh-CN": "奇局", en: "Qiju" });
   const [allowFixedSeed, setAllowFixedSeed] = useState(true);
   const [active, setActive] = useState<ActiveMatch | null>(() => {
@@ -42,8 +43,9 @@ export function App() {
       }
       const localeRes = await fetch(`/api/v1/content/${contentBundleId}/${locale}`);
       if (localeRes.ok) {
-        const data = (await localeRes.json()) as { strings: Strings };
+        const data = (await localeRes.json()) as { strings: Strings; catalog?: CatalogItem[] };
         setStrings(data.strings);
+        setCatalog(data.catalog ?? []);
       }
     })();
   }, [locale]);
@@ -73,14 +75,16 @@ export function App() {
 
   if (!active || !connection) {
     return (
-      <HomePage
-        strings={strings}
-        locale={locale}
-        onLocale={setLocale}
-        onCreated={(matchId, mode, seed) => setActive({ matchId, mode, seed })}
-        allowFixedSeed={allowFixedSeed}
-        productName={productName}
-      />
+      <div className="app-shell home-shell">
+        <HomePage
+          strings={strings}
+          locale={locale}
+          onLocale={setLocale}
+          onCreated={(matchId, mode, seed) => setActive({ matchId, mode, seed })}
+          allowFixedSeed={allowFixedSeed}
+          productName={productName}
+        />
+      </div>
     );
   }
 
@@ -105,9 +109,10 @@ export function App() {
   }
 
   const isObserver = active.mode === "all-ai";
+  const immersive = view.phase !== "setup" && view.phase !== "completed";
 
   return (
-    <>
+    <div className={immersive ? "app-shell game-shell" : "app-shell"}>
       {!connection.connected ? <p className="offline">{t(strings, "error.connection")}</p> : null}
       {isObserver && view.phase !== "completed" ? (
         <DemoControls strings={strings} connection={connection} seed={active.seed} />
@@ -123,8 +128,9 @@ export function App() {
           connection={connection}
           isObserver={isObserver}
           seed={active.seed}
+          catalog={catalog}
         />
       )}
-    </>
+    </div>
   );
 }

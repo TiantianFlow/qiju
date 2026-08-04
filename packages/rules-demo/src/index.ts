@@ -122,3 +122,11 @@ export function compileDemoV1(): CompiledRuleRuntime {
 export function compileDemoV2(): CompiledRuleRuntime {
   return compileContent(buildContentSyntheticV2());
 }
+
+export {
+  estimateConservativeValue,
+  tierFloor,
+  cellFloor,
+  estimatedValueForView,
+  estimateForSeat,
+} from "./valuation.js";

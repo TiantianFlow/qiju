@@ -192,7 +192,15 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
       return reply.code(404).send({ error: "MATCH_NOT_FOUND_OR_FORBIDDEN" });
     }
     const locale = params.locale === "en" ? "en" : "zh-CN";
-    return { locale, strings: runtime.locale[locale], contentHash: runtime.contentHash };
+    const catalog = runtime.catalogSorted.map((item) => ({
+      id: item.id,
+      tier: item.tier,
+      category: item.category,
+      value: item.value,
+      footprint: item.footprint ?? { width: 1, height: 1 },
+      shapeId: item.shapeId,
+    }));
+    return { locale, strings: runtime.locale[locale], contentHash: runtime.contentHash, catalog };
   });
 
   app.post("/api/v1/demo-matches", async (request, reply) => {
