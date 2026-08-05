@@ -19,7 +19,13 @@ builder = "NIXPACKS"
 # (the server needs it at runtime for Secure/SameSite=None cookies), and pnpm
 # otherwise skips devDependencies — which is where typescript lives, so `tsc`
 # would not exist at build time.
-buildCommand = "pnpm install --frozen-lockfile --prod=false && pnpm --filter @qiju/server... run build"
+#
+# --config.confirmModulesPurge=false is required alongside it: if the builder
+# has already run a prod-only install, switching to a full install needs to
+# purge node_modules. That purge asks for confirmation, and when unanswered
+# pnpm exits 0 WITHOUT installing devDependencies — a silent no-op that fails
+# later at `tsc: command not found`. This flag makes the purge unattended.
+buildCommand = "pnpm install --frozen-lockfile --prod=false --config.confirmModulesPurge=false && pnpm --filter @qiju/server... run build"
 
 [deploy]
 startCommand = "node apps/server/dist/main.js"
