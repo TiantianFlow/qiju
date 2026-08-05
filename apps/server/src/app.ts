@@ -4,6 +4,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from "fastify";
 import fastifyCookie from "@fastify/cookie";
+import fastifyCors from "@fastify/cors";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
@@ -40,6 +41,12 @@ const envSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
   NODE_ENV: z.string().default("development"),
+  // Comma-separated list of allowed frontend origins for cross-origin deploys
+  // (e.g. Cloudflare Pages -> Railway). Unset means unrestricted (dev mode).
+  CORS_ORIGIN: z.string().optional(),
+  // Cookie domain shared between frontend/backend subdomains of the same
+  // parent domain (e.g. ".example.com"). Unset means host-only cookie.
+  COOKIE_DOMAIN: z.string().optional(),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;
@@ -131,7 +138,21 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     disableRequestLogging: true,
   });
 
+  const corsOrigins = env.CORS_ORIGIN
+    ? env.CORS_ORIGIN.split(",")
+        .map((o) => o.trim())
+        .filter(Boolean)
+    : null;
+
   await app.register(fastifyCookie, { secret: cookieSecret });
+  await app.register(fastifyCors, {
+    // No CORS_ORIGIN configured -> unrestricted (local dev / same-origin deploy).
+    // Configured -> only the listed frontend origin(s); credentialed requests
+    // still need an explicit (non-wildcard) origin, which @fastify/cors handles
+    // by reflecting the request origin when it matches the allowlist.
+    origin: corsOrigins ?? true,
+    credentials: true,
+  });
   await app.register(fastifyWebsocket, { options: { maxPayload: 64 * 1024 } });
   await app.register(fastifyRateLimit, {
     max: 240,
@@ -155,10 +176,13 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     guestStore.set(principalId, { principalId });
     reply.setCookie("lv_guest", principalId, {
       httpOnly: true,
-      sameSite: "lax",
+      // Cross-origin (frontend/backend on separate domains) needs SameSite=None
+      // + Secure to be sent at all; same-origin dev keeps the stricter default.
+      sameSite: env.NODE_ENV === "production" ? "none" : "lax",
       secure: env.NODE_ENV === "production",
       path: "/",
       signed: true,
+      ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
     });
     return principalId;
   }
@@ -333,7 +357,15 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     if (origin) {
       try {
         const originHost = new URL(origin).host;
-        if (originHost !== request.headers.host) {
+        const allowedHosts = new Set([request.headers.host]);
+        for (const allowed of corsOrigins ?? []) {
+          try {
+            allowedHosts.add(new URL(allowed).host);
+          } catch {
+            /* skip malformed CORS_ORIGIN entries */
+          }
+        }
+        if (!allowedHosts.has(originHost)) {
           socket.close(4001, "ORIGIN_FORBIDDEN");
           return;
         }

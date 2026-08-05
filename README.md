@@ -1,8 +1,44 @@
-# Qiju（奇局）MVP
+# Qiju
 
-原创、自托管的四席密封竞价游戏。当前为本地工作名，公开发布前名称与许可仍待法律门禁。
+A research-grade sealed-bid auction game inspired by competitive auction
+mechanics: four seats race to value an opaque lot of collectibles through a
+veil of partial, asymmetric intel, then submit sealed bids across a
+multi-round auction with escalating pass-price thresholds.
 
-## 运行（Linux x64 / macOS）
+**[Live Demo →](#)**
+
+Qiju is a from-scratch, deterministic reimplementation — original content,
+original economy, original UI — built as a full-stack TypeScript reference
+project: a pure functional game-core state machine, a Fastify + WebSocket
+authoritative server, a React client, and a CLI arena for offline AI-vs-AI
+simulation at scale.
+
+## Architecture
+
+A pnpm workspace monorepo:
+
+```
+qiju/
+├── apps/
+│   ├── web/              React + Vite client (deployable as a static SPA)
+│   ├── server/            Fastify HTTP + WebSocket authoritative game server
+│   └── arena/              CLI for offline batch simulation & AI benchmarking
+├── packages/
+│   ├── game-core/          Pure deterministic state machine (no I/O, no clock, no RNG side effects)
+│   ├── content-demo/       Item catalog, value bands, locale strings
+│   ├── rules-demo/         Rule bundle compilation + conservative valuation engine
+│   ├── agents/             Built-in deterministic AI agents (heuristic bidders)
+│   ├── session-runtime/    In-memory room executor, clock abstraction, AI orchestration
+│   ├── contracts/          Shared wire protocol types (zod schemas)
+│   └── test-kit/           Shared test fixtures/helpers
+└── scripts/                 Repo guard scripts (e.g. forbidden-content check)
+```
+
+Match state lives entirely in server memory — there is no database. A server
+restart drops any in-progress matches; this is a deliberate scope decision,
+not a limitation to work around.
+
+## Quick start
 
 ```bash
 pnpm install
@@ -10,44 +46,68 @@ pnpm build
 node apps/server/dist/main.js
 ```
 
-默认监听 `0.0.0.0:3000`，浏览器打开 `http://localhost:3000`。
+Open `http://localhost:3000`.
 
-环境变量：`PORT`、`HOST`、`DATA_DIR`、`COOKIE_SECRET`（生产必需）、`LOG_LEVEL`、`ALLOW_FIXED_SEED`、`NODE_ENV`。
-
-## 开发
+For local development with hot reload (two terminals):
 
 ```bash
-pnpm dev:server    # tsx watch, 端口 3000
-pnpm dev:web       # vite dev, 端口 5173, 代理 /api
+pnpm dev:server    # tsx watch, http://localhost:3000
+pnpm dev:web       # vite dev, http://localhost:5173, proxies /api to :3000
 ```
 
-## 门禁命令
+## Environment variables
+
+| Variable | Where | Default | Description |
+|---|---|---|---|
+| `PORT` | server | `3000` | HTTP/WS listen port |
+| `HOST` | server | `0.0.0.0` | Listen address |
+| `NODE_ENV` | server | `development` | `production` enables `Secure`/`SameSite=None` guest cookies and requires `COOKIE_SECRET` |
+| `COOKIE_SECRET` | server | — | Required in production; signs the guest-session cookie |
+| `CORS_ORIGIN` | server | unset (unrestricted) | Comma-separated allowed frontend origin(s) for a cross-origin deploy |
+| `COOKIE_DOMAIN` | server | unset (host-only) | Shared parent domain for the guest cookie, if frontend/backend share one |
+| `DATA_DIR` | server | `data` | Arena report output directory |
+| `LOG_LEVEL` | server | `info` | Fastify/pino log level |
+| `ALLOW_FIXED_SEED` | server | `true` | Allow clients to request a reproducible match seed |
+| `VITE_API_URL` | web (build-time) | unset (relative paths) | Backend origin, set only for a cross-origin deploy — see [`.env.example`](./.env.example) and [`apps/web/.env.example`](./apps/web/.env.example) |
+
+## Deployment
+
+Designed for a split deploy: a static frontend on an edge CDN, a stateful
+Node backend on a real compute host.
+
+**Frontend (`apps/web`) → Cloudflare Pages** (or any static host)
+- Build command: `pnpm --filter @qiju/web... run build`
+- Output directory: `apps/web/dist`
+- Set `VITE_API_URL` to the backend's public URL in the Pages build
+  environment.
+
+**Backend (`apps/server`) → Railway** (or any Node-capable host — Fastify +
+WebSocket needs a real persistent process; this cannot run on static hosting
+or standard edge/Workers runtimes as-is). See
+[`apps/server/railway.toml`](./apps/server/railway.toml) for the Railway
+service config. Set `NODE_ENV=production`, `COOKIE_SECRET`, and `CORS_ORIGIN`
+(the frontend's origin) in the platform's environment settings.
+
+No domain names are hardcoded anywhere in this repo — everything above is
+wired through environment variables at build/deploy time.
+
+## Gate commands
 
 ```bash
 pnpm lint
 pnpm typecheck
 pnpm test
 pnpm test:integration
-pnpm arena:smoke     # 固定 1,000 场 smoke
+pnpm arena:smoke     # 1,000-match fixed-seed AI smoke run
 pnpm build
-pnpm test:e2e        # Playwright（先 pnpm build）
-pnpm guard:content   # 禁止私人研究数据／标识进入源码
+pnpm test:e2e        # Playwright, requires `pnpm build` first
+pnpm guard:content   # forbids private/research identifiers and hardcoded domains in source
 ```
 
-## 范围说明
+## Screenshot
 
-- 活动比赛只保存在服务器内存；进程重启会中止活动比赛，页面提示可恢复到首页。
-- 同一进程内支持浏览器断线重连、commandId 幂等、绝对截止、stale revision 拒绝、最多结算一次。
-- Arena 制品写入显式数据目录（`data/`）。
-- 不实现 SQLite、迁移、备份、进程重启恢复。
+_placeholder — add a screenshot or GIF of a match in progress here._
 
-## 结构
+## License
 
-- `packages/game-core`：纯确定性状态机（无网络／时钟／随机外部源）。
-- `packages/rules-demo` + `packages/content-demo`：冻结的 `demo.v0` 与 `content.synthetic.v0`。
-- `packages/agents`：4 个内置确定性 Agent 与降级。
-- `packages/replay`：无头比赛驱动、规范重放验证。
-- `packages/session-runtime`：内存房间执行器、Clock、AI 协调。
-- `apps/server`：Fastify HTTP + WebSocket 权威服务器。
-- `apps/web`：可替换的 React 演示 UI。
-- `apps/arena`：离线批量模拟与报告 CLI。
+MIT — see [LICENSE](./LICENSE).

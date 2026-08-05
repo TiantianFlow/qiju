@@ -1,4 +1,5 @@
 import type { MatchView, ServerEnvelope, SnapshotPayload } from "./types";
+import { API_BASE_URL } from "./config";
 
 type Listener = () => void;
 
@@ -27,8 +28,17 @@ export class MatchConnection {
   constructor(public matchId: string) {}
 
   connect(): void {
-    const protocol = location.protocol === "https:" ? "wss" : "ws";
-    this.socket = new WebSocket(`${protocol}://${location.host}/api/v1/matches/${this.matchId}/stream`);
+    let wsProtocol: string;
+    let host: string;
+    if (API_BASE_URL) {
+      const apiUrl = new URL(API_BASE_URL);
+      wsProtocol = apiUrl.protocol === "https:" ? "wss" : "ws";
+      host = apiUrl.host;
+    } else {
+      wsProtocol = location.protocol === "https:" ? "wss" : "ws";
+      host = location.host;
+    }
+    this.socket = new WebSocket(`${wsProtocol}://${host}/api/v1/matches/${this.matchId}/stream`);
     this.socket.onopen = () => {
       this.connected = true;
       this.emit();

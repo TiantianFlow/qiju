@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Locale, Strings } from "../types";
 import { persistLocale, t } from "../i18n";
+import { API_BASE_URL, withApiCredentials } from "../config";
 
 export function HomePage({
   strings,
@@ -26,11 +27,14 @@ export function HomePage({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch("/api/v1/demo-matches", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, ...(seed ? { seed } : {}) }),
-      });
+      const response = await fetch(
+        `${API_BASE_URL}/api/v1/demo-matches`,
+        withApiCredentials({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode, ...(seed ? { seed } : {}) }),
+        }),
+      );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = (await response.json()) as { matchId: string; seed: string };
       onCreated(data.matchId, mode, data.seed);

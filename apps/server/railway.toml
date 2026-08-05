@@ -1,0 +1,25 @@
+# Railway service config for @qiju/server.
+#
+# In the Railway dashboard, keep this service's "Root Directory" at the repo
+# root (monorepo checkout) and set "Custom Config File Path" to
+# apps/server/railway.toml. That way build/start commands below run with the
+# full pnpm workspace on disk (this service depends on several workspace
+# packages under packages/*).
+#
+# Required environment variables (set in the Railway dashboard, not here):
+#   NODE_ENV=production
+#   COOKIE_SECRET=<32+ char random secret>
+#   CORS_ORIGIN=https://<frontend-domain>        (e.g. Cloudflare Pages domain)
+#   COOKIE_DOMAIN=<shared parent domain>          (optional, e.g. .example.com)
+# Railway injects PORT automatically; the app already reads it from env.
+
+[build]
+builder = "NIXPACKS"
+buildCommand = "pnpm install --frozen-lockfile && pnpm --filter @qiju/server... run build"
+
+[deploy]
+startCommand = "node apps/server/dist/main.js"
+healthcheckPath = "/health/live"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

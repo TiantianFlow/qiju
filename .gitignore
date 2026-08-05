@@ -6,3 +6,9 @@ playwright-report/
 test-results/
 data/
 .DS_Store
+
+# Local env files (never commit real secrets/domains) — .env.example files
+# are intentionally kept.
+.env
+.env.local
+.env.*.local

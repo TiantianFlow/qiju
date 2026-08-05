@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CatalogItem, Locale, Strings } from "./types";
 import { detectLocale, t } from "./i18n";
+import { API_BASE_URL, withApiCredentials } from "./config";
 import { MatchConnection } from "./connection";
 import { useConnection } from "./hooks";
 import { HomePage } from "./pages/Home";
@@ -29,7 +30,7 @@ export function App() {
 
   useEffect(() => {
     void (async () => {
-      const capRes = await fetch("/api/v1/capabilities");
+      const capRes = await fetch(`${API_BASE_URL}/api/v1/capabilities`, withApiCredentials());
       let contentBundleId = "content.synthetic.v2";
       if (capRes.ok) {
         const cap = (await capRes.json()) as {
@@ -41,7 +42,10 @@ export function App() {
         setAllowFixedSeed(cap.allowFixedSeed);
         if (cap.contentBundleId) contentBundleId = cap.contentBundleId;
       }
-      const localeRes = await fetch(`/api/v1/content/${contentBundleId}/${locale}`);
+      const localeRes = await fetch(
+        `${API_BASE_URL}/api/v1/content/${contentBundleId}/${locale}`,
+        withApiCredentials(),
+      );
       if (localeRes.ok) {
         const data = (await localeRes.json()) as { strings: Strings; catalog?: CatalogItem[] };
         setStrings(data.strings);
