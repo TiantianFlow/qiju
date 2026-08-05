@@ -15,7 +15,11 @@
 
 [build]
 builder = "NIXPACKS"
-buildCommand = "pnpm install --frozen-lockfile && pnpm --filter @qiju/server... run build"
+# --prod=false is required: NODE_ENV=production is set as a service variable
+# (the server needs it at runtime for Secure/SameSite=None cookies), and pnpm
+# otherwise skips devDependencies — which is where typescript lives, so `tsc`
+# would not exist at build time.
+buildCommand = "pnpm install --frozen-lockfile --prod=false && pnpm --filter @qiju/server... run build"
 
 [deploy]
 startCommand = "node apps/server/dist/main.js"
