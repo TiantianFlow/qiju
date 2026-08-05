@@ -29,6 +29,11 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # Must precede typecheck and test: packages resolve each other's types
+      # through compiled dist/*.d.ts, which a fresh checkout doesn't have yet.
+      - name: Build
+        run: pnpm build
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -37,6 +42,3 @@ jobs:
 
       - name: Guard against forbidden content leaks
         run: pnpm guard:content
-
-      - name: Build
-        run: pnpm build
