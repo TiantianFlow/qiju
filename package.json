@@ -16,7 +16,6 @@
     "arena:smoke": "pnpm --filter @qiju/arena run smoke",
     "build": "pnpm -r run build",
     "test:e2e": "pnpm --filter @qiju/web run test:e2e",
-    "guard:content": "node scripts/check-forbidden-content.mjs",
     "dev:server": "pnpm --filter @qiju/server run dev",
     "dev:web": "pnpm --filter @qiju/web run dev",
     "start": "node apps/server/dist/main.js"
