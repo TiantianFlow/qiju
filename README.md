@@ -5,7 +5,7 @@ mechanics: four seats race to value an opaque lot of collectibles through a
 veil of partial, asymmetric intel, then submit sealed bids across a
 multi-round auction with escalating pass-price thresholds.
 
-**[Live Demo →](#)**
+**🎲 [Play the live demo →](https://qijugame.com)**
 
 Qiju is a from-scratch, deterministic reimplementation — original content,
 original economy, original UI — built as a full-stack TypeScript reference
@@ -108,6 +108,18 @@ pnpm guard:content   # forbids private/research identifiers and hardcoded domain
 
 _placeholder — add a screenshot or GIF of a match in progress here._
 
+## Project status
+
+Qiju is a personal research and demo project, open-sourced for anyone curious
+about deterministic game engines, sealed-bid auction mechanics, or full-stack
+TypeScript architecture. It is not a supported product: bug reports and small
+fixes are welcome, but large feature requests are likely to go unanswered.
+
+The live demo runs on free/hobby-tier hosting and holds match state in memory
+only — expect it to restart occasionally and drop in-progress matches.
+
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT — see [LICENSE](./LICENSE). This covers the entire project; all game
+content is procedurally generated or written from scratch, with no third-party
+art, audio, or font assets.
