@@ -67,6 +67,12 @@ export const randomLegalAgent: Agent = {
   },
 };
 
+/**
+ * Share of the starting budget a seat is willing to expose, indexed by round.
+ * Escalates as the auction closes; the final round releases the full budget.
+ */
+const ROUND_EXPOSURE_PERCENT = [35, 50, 65, 80, 100] as const;
+
 interface PersonaParams {
   winnerCurseDiscountPercent: number;
   bidFractionPercent: number;
@@ -153,8 +159,25 @@ export function createHeuristicAgent(
       const lateRound = round >= 4 || observation.phase === "tiebreak";
       const completionBoost = lateRound ? params.completionBias : 0;
       const noise = rng.nextBelow(Math.max(1, Math.floor(target / 8) + 1));
-      let amount = target + completionBoost + noise;
-      amount = Math.max(0, Math.min(observation.startingBudget, amount));
+      let amount = target + completionBoost;
+      // Cap how much of the budget a seat will expose this round. Winning
+      // rounds 1-4 requires beating the runner-up by a wide margin, so an
+      // early all-in is pure winner's curse — yet without a cap the raw target
+      // routinely exceeds the budget on a high-variance lot and clamps to the
+      // full amount, which then trivially clears the 2x round-1 threshold and
+      // ends the auction on the first bid. Release the whole budget only once
+      // the auction is actually closing.
+      const exposurePercent =
+        observation.phase === "tiebreak"
+          ? 100
+          : (ROUND_EXPOSURE_PERCENT[Math.min(Math.max(round, 1), ROUND_EXPOSURE_PERCENT.length) - 1] ?? 100);
+      const exposureCap = Math.floor((observation.startingBudget * exposurePercent) / 100);
+      // Clamp to a headroom band, then add the jitter, so that seats whose raw
+      // target overshoots the cap still land on *different* numbers. Clamping
+      // first and jittering afterwards would push everyone back onto the cap
+      // and produce ties — and a tie in the final round means nobody wins.
+      amount = Math.max(0, Math.min(Math.floor((exposureCap * 7) / 8), amount)) + noise;
+      amount = Math.max(0, Math.min(exposureCap, amount));
 
       const alreadyBid = observation.mySeat.currentBid;
       if (alreadyBid !== undefined) {

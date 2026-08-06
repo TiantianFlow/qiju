@@ -84,10 +84,12 @@ test.describe("human vs AI match", () => {
     await expect(page.getByTestId("result-board")).toBeVisible();
     await expect(page.getByTestId("result-sold")).toBeVisible();
     await expect(page.getByTestId("result-buyer")).toHaveText("seat2");
-    // Round-THE-10: winning bid changed when agents switched from a
-    // min/max/quantile blend to observation.estimatedValue (now a true
-    // expected value, not a conservative floor) as their bidding base.
-    await expect(page.getByTestId("result-winning-bid")).toHaveText("885,003");
+    // Pinned to prove determinism: the same seed must always produce the same
+    // winning bid. Expect this value to change whenever agent bid math changes
+    // — THE-10 moved it (expected-value base), THE-23 moved it again
+    // (per-round budget-exposure cap). Re-pin, don't loosen: a range assertion
+    // here would stop detecting the non-determinism this exists to catch.
+    await expect(page.getByTestId("result-winning-bid")).toHaveText("638,471");
     await page.getByTestId("restart").click();
     await expect(page.getByTestId("play-vs-ai")).toBeVisible();
   });

@@ -342,10 +342,11 @@ describe("session runtime (in-memory, FakeClock)", () => {
     const manager = createDemoManager(clock);
     const { events, updates } = collectEvents();
     // Seed chosen because it produces a multi-round auction, which is what this
-    // test is about. Bid amounts depend on the shared expected-value estimate,
-    // so a seed can flip to a single-round settlement when that math changes —
-    // "it-v2-seed" did exactly that. The assertions below are unchanged.
-    const room = manager.createAllAi({ matchId: "multi-frames", seed: "it-v2-multi-0", events });
+    // test is about. Bid amounts depend on the shared expected-value estimate
+    // and the per-round budget-exposure cap, so a seed can flip to a
+    // single-round settlement when either changes. "mr-7" is picked with margin
+    // (5 bidding rounds, not the bare 2 this asserts) to survive small tuning.
+    const room = manager.createAllAi({ matchId: "multi-frames", seed: "mr-7", events });
     await room.initializeDemoToAuctionReady();
     updates.length = 0;
     const kinds: string[] = [];
@@ -429,8 +430,11 @@ describe("session runtime (in-memory, FakeClock)", () => {
     const manager = createDemoManager(clock);
     const { events } = collectEvents();
     // matchId enters agentSeed (`${matchId}:${seed}`); use the production-derived id so this seed stays multi-round.
-    const matchId = `seed-${createHash("sha256").update("all-ai:seed-multi-1").digest("hex").slice(0, 32)}`;
-    const room = manager.createAllAi({ matchId, seed: "seed-multi-1", events });
+    // "sm-23" is picked with margin (6 bidding rounds) so bid-math tuning does
+    // not silently reduce this to a single-round match and break the assertion.
+    const seed = "sm-23";
+    const matchId = `seed-${createHash("sha256").update(`all-ai:${seed}`).digest("hex").slice(0, 32)}`;
+    const room = manager.createAllAi({ matchId, seed, events });
     await room.initializeDemoToAuctionReady();
     const lotSize = room.currentState.lot!.slots.length;
     const readyRounds: number[] = [];
