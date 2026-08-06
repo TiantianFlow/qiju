@@ -183,10 +183,12 @@ pnpm test:e2e        # Playwright, requires `pnpm build` first
 
 ## About this project
 
-Qiju is a fan-made, non-commercial hobby project — an original take on the
-sealed-bid auction format, written from scratch. All items, artwork, text and
-economy are original or procedurally generated. It isn't affiliated with or
-endorsed by anyone.
+Qiju is a fan-made, non-commercial hobby project — a take on the sealed-bid
+auction format, written from scratch. The engine, rules, economy, interface
+and code are entirely original, and most of the collectibles are generated
+procedurally; a handful of named items are affectionate nods to the genre that
+inspired it. Nothing here is copied from anyone else's assets, and the project
+isn't affiliated with or endorsed by anyone.
 
 It's a personal project rather than a supported product: bug reports and small
 fixes are welcome, large feature requests probably won't get picked up. The
