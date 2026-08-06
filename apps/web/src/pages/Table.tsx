@@ -345,24 +345,26 @@ export function TablePage({
               {canBid ? (
                 <div className="bid-row">
                   <label htmlFor="bid-input">{t(strings, "table.yourBid")}</label>
-                  <input
-                    id="bid-input"
-                    type="number"
-                    min={0}
-                    max={view.startingBudget}
-                    value={bidInput}
-                    onChange={(e) => setBidInput(e.target.value)}
-                    data-testid="bid-input"
-                  />
-                  <button
-                    onClick={() => submitBid(Math.max(0, Math.min(view.startingBudget, Number(bidInput) || 0)))}
-                    data-testid="submit-bid"
-                  >
-                    {t(strings, "table.submitBid")}
-                  </button>
-                  <button onClick={() => submitBid(0)} data-testid="pass-bid">
-                    {t(strings, "table.pass")}
-                  </button>
+                  <div className="bid-row-controls">
+                    <input
+                      id="bid-input"
+                      type="number"
+                      min={0}
+                      max={view.startingBudget}
+                      value={bidInput}
+                      onChange={(e) => setBidInput(e.target.value)}
+                      data-testid="bid-input"
+                    />
+                    <button
+                      onClick={() => submitBid(Math.max(0, Math.min(view.startingBudget, Number(bidInput) || 0)))}
+                      data-testid="submit-bid"
+                    >
+                      {t(strings, "table.submitBid")}
+                    </button>
+                    <button onClick={() => submitBid(0)} data-testid="pass-bid">
+                      {t(strings, "table.pass")}
+                    </button>
+                  </div>
                 </div>
               ) : null}
               {my.currentBid !== undefined ? (

@@ -52,7 +52,19 @@ body {
 }
 
 .app-shell.game-shell {
-  overflow: hidden;
+  /*
+   * THE-22 safety valve: the immersive layout below (HUD, board, bid dock)
+   * is sized to fit in one screen and normally never needs to scroll — but
+   * a fixed 100dvh box with overflow:hidden turns any future layout
+   * regression (a wrapped control, an unusually tall board, a new
+   * viewport size nobody tested) into permanently unreachable content
+   * instead of a merely annoying scroll. overflow-y:auto is a no-op
+   * visually whenever content already fits (no scrollbar, same box), and
+   * only engages when it doesn't — so this doesn't change normal-case
+   * layout, it just stops "doesn't fit" from meaning "stuck".
+   */
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 8px 12px;
   gap: 6px;
 }
@@ -274,7 +286,19 @@ button.link {
   gap: 8px;
   flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
+  /*
+   * THE-22: overflow:hidden here (and on .immersive-body / .table-side
+   * below) used to clip each container's own overflow independently —
+   * that's the actual reason the earlier bid-dock fix needed to be exact:
+   * once *any* nested layer clipped silently, no amount of overflow-y:auto
+   * on the outer .app-shell.game-shell could see it and offer a scrollbar,
+   * since each hidden ancestor absorbed the overflow before it could
+   * propagate up. min-height:0 (which is what actually makes these flex/
+   * grid items shrink correctly) doesn't depend on overflow:hidden, so
+   * switching to visible keeps normal-case sizing identical and just lets
+   * genuine overflow reach the one real safety valve at the shell.
+   */
+  overflow: visible;
 }
 
 .immersive-body {
@@ -283,7 +307,7 @@ button.link {
   gap: 12px;
   flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .table-side {
@@ -291,7 +315,7 @@ button.link {
   flex-direction: column;
   gap: 8px;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .table-side-scroll {
@@ -423,6 +447,13 @@ button.link {
   flex-wrap: wrap;
 }
 
+.bid-row-controls {
+  display: flex;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .bid-row input {
   width: 120px;
 }
@@ -489,6 +520,22 @@ button.link {
     grid-template-columns: 1fr;
   }
 
+  /*
+   * THE-22: once .immersive-body stacks into two rows (board above
+   * .table-side), plain implicit "auto" row tracks size each row off its
+   * own content independently and don't guarantee the second row (which
+   * holds the non-shrinking bid dock) its needed space — the board's row
+   * can end up claiming more than its fair share, squeezing table-side
+   * below what its own flex-shrink:0 dock needs. Pin the board row to
+   * "whatever's left" (minmax(0, 1fr) — it already scrolls internally via
+   * .lot-board-viewport, so it's safe to shrink) and let table-side's row
+   * size to its actual content (auto), same "flexible region gets 1fr /
+   * fixed region gets auto" split .table-side already uses internally.
+   */
+  .immersive-body {
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
   .value-hud {
     grid-template-columns: 1fr 1fr;
   }
@@ -504,6 +551,36 @@ button.link {
 
   .app-shell.game-shell {
     padding: 6px;
+  }
+}
+
+@media (max-width: 480px) {
+  /* THE-22: label+120px-input+2 buttons don't fit one line at 320-375px
+     and wrap unpredictably. Stack the label, then let the input flex down
+     from its fixed 120px and the two buttons share the rest of the row —
+     tighter than the accidental wrap, and no longer needs the row's full
+     natural (wrapped) height to show every control. */
+  .bid-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+
+  .bid-row-controls {
+    gap: 6px;
+  }
+
+  .bid-row input {
+    width: auto;
+    flex: 1 1 64px;
+    min-width: 0;
+  }
+
+  .bid-row-controls button {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 10px 8px;
+    font-size: 14px;
   }
 }
 
