@@ -341,7 +341,11 @@ describe("session runtime (in-memory, FakeClock)", () => {
     const clock = new FakeClock(0);
     const manager = createDemoManager(clock);
     const { events, updates } = collectEvents();
-    const room = manager.createAllAi({ matchId: "multi-frames", seed: "it-v2-seed", events });
+    // Seed chosen because it produces a multi-round auction, which is what this
+    // test is about. Bid amounts depend on the shared expected-value estimate,
+    // so a seed can flip to a single-round settlement when that math changes —
+    // "it-v2-seed" did exactly that. The assertions below are unchanged.
+    const room = manager.createAllAi({ matchId: "multi-frames", seed: "it-v2-multi-0", events });
     await room.initializeDemoToAuctionReady();
     updates.length = 0;
     const kinds: string[] = [];
