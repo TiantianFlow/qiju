@@ -1,4 +1,4 @@
-import { estimateConservativeValue } from "./valuation.js";
+import { estimateConservativeValue, estimateExpectedValue } from "./valuation.js";
 import { canonicalHash } from "./prng-hash.js";
 import { Xoshiro128StarStar, deriveStreamSeed } from "./prng.js";
 import type {
@@ -1423,7 +1423,25 @@ function projectView(
 
   const board = projectBoard(runtime, state, viewer, knowledge);
   const publicEvents = projectPublicEvents(state);
-  const estimatedValue = estimateConservativeValue(runtime, state, knowledge);
+  // Once the match is complete there's no more uncertainty — the true sum
+  // IS the expected value, and estimateConservativeValue's completed-phase
+  // branch already computes that exact total straight from the catalog
+  // (bypassing per-viewer intel, which may be incomplete for objects no one
+  // ever inspected). Pre-completion, use the real expected-value estimate:
+  // same formula the agents use to size bids, so the HUD and the agents can
+  // never drift apart. Board takes precedence over the legacy flat slots
+  // list when both are present, matching how agents already read observations.
+  const estimatedValue =
+    state.phase.kind === "completed"
+      ? estimateConservativeValue(runtime, state, knowledge)
+      : board
+        ? estimateExpectedValue(board.revealedObjects)
+        : estimateExpectedValue(
+            slots.map((s) => ({
+              ...(s.knownFields.value !== undefined ? { exactValue: s.knownFields.value } : {}),
+              candidateSummary: s.candidates,
+            })),
+          );
 
   return {
     viewer,

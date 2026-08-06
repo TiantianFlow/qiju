@@ -1,4 +1,4 @@
-import type { CompiledRuleRuntime, MatchState } from "./state.js";
+import type { CandidateRange, CompiledRuleRuntime, MatchState } from "./state.js";
 import type { ItemDef, SlotId, TierId } from "./types.js";
 import { parseRectangularShapeId } from "./types.js";
 
@@ -96,6 +96,34 @@ export function estimateConservativeValue(
     }
   }
 
+  return total;
+}
+
+/** An object/slot contribution as seen by a viewer: either its exact known value, or its candidate range. */
+export interface ExpectedValueContribution {
+  exactValue?: number;
+  candidateSummary?: CandidateRange;
+}
+
+/**
+ * Single source of truth for the player-facing "expected value" estimate:
+ * the sum of each object's exact value where known, else its candidate mean
+ * (unweightedMeanValueFloor). This is the SAME formula the built-in agents
+ * use to size their bids (via SeatObservation.estimatedValue) — the HUD and
+ * the agents read one number computed here, so they cannot drift apart.
+ *
+ * Unlike estimateConservativeValue, this is a genuine expected value, not a
+ * lower bound: it can move up or down as new intel arrives (e.g. learning a
+ * tier narrows the candidate pool toward that tier's own mean, which may sit
+ * below the wider prior mean). That's expected Bayesian-updating behavior,
+ * not a bug.
+ */
+export function estimateExpectedValue(objects: readonly ExpectedValueContribution[]): number {
+  let total = 0;
+  for (const obj of objects) {
+    if (obj.exactValue !== undefined) total += obj.exactValue;
+    else if (obj.candidateSummary) total += obj.candidateSummary.unweightedMeanValueFloor;
+  }
   return total;
 }
 

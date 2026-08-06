@@ -453,22 +453,33 @@ describe("session runtime (in-memory, FakeClock)", () => {
     expect(completed.board!.revealedObjects).toHaveLength(lotSize);
   });
 
-  it("estimatedValue is present and non-decreasing across demo presentation frames", async () => {
+  it("estimatedValue is present throughout and converges to the true lot sum once completed", async () => {
+    // estimatedValue is now a genuine expected value (candidate mean, not a
+    // conservative floor) — see estimateExpectedValue in @qiju/game-core.
+    // Unlike the old floor, it is NOT guaranteed non-decreasing: learning a
+    // tier can narrow the candidate pool toward a mean below the wider prior
+    // mean. That's correct Bayesian updating, not a regression, so this only
+    // checks it stays a valid non-negative number throughout and lands
+    // exactly on the true total once every object is resolved.
     const clock = new FakeClock(0);
     const manager = createDemoManager(clock);
     const { events } = collectEvents();
     const room = manager.createAllAi({ matchId: "est-mono", seed: "e2e-demo-seed", events });
     await room.initializeDemoToAuctionReady();
-    let prev = room.publicView().estimatedValue;
-    expect(typeof prev).toBe("number");
+    expect(typeof room.publicView().estimatedValue).toBe("number");
+    expect(room.publicView().estimatedValue).toBeGreaterThanOrEqual(0);
     let guard = 0;
     while (room.demoState.presentation?.kind !== "completed" && guard++ < 80) {
       await room.demoStep();
       const next = room.publicView().estimatedValue;
-      expect(next).toBeGreaterThanOrEqual(prev);
-      prev = next;
+      expect(typeof next).toBe("number");
+      expect(next).toBeGreaterThanOrEqual(0);
     }
-    expect(room.publicView().estimatedValue).toBeGreaterThan(0);
+    const trueSum = room.currentState.lot!.slots.reduce(
+      (sum, slot) => sum + (runtimeV2.catalog.get(slot.itemId)?.value ?? 0),
+      0,
+    );
+    expect(room.publicView().estimatedValue).toBe(trueSum);
   });
 
   it("step consumes multiple internal actions when needed but yields one checkpoint", async () => {

@@ -68,7 +68,6 @@ export const randomLegalAgent: Agent = {
 };
 
 interface PersonaParams {
-  valueQuantile: number;
   winnerCurseDiscountPercent: number;
   bidFractionPercent: number;
   toolEagerness: number;
@@ -115,7 +114,10 @@ export function createHeuristicAgent(
         }
       }
 
-      const estimate = estimateLotValue(observation);
+      // Same expected-value number the player sees on the HUD (SeatObservation.estimatedValue) —
+      // see estimateExpectedValue in @qiju/game-core. Range info is kept only for diagnostics.
+      const baseEstimate = observation.estimatedValue;
+      const range = estimateLotValue(observation);
       const windowId = context.actionWindowId;
 
       if (!windowId) {
@@ -135,18 +137,15 @@ export function createHeuristicAgent(
         return {
           action: { kind: "use_tool", seatId: context.seatId, toolId, actionWindowId: windowId },
           diagnostics: {
-            estimatedValueRange: estimate,
+            estimatedValueRange: range,
             riskBand: params.riskBand,
             rationaleCodes: ["use-tool-for-info"],
           },
         };
       }
 
-      const valueAtQuantile =
-        estimate.min + Math.floor(((estimate.max - estimate.min) * params.valueQuantile) / 100);
-      const blended = Math.floor((valueAtQuantile + estimate.mean) / 2);
       const discounted = Math.floor(
-        (blended * (100 - params.winnerCurseDiscountPercent)) / 100,
+        (baseEstimate * (100 - params.winnerCurseDiscountPercent)) / 100,
       );
       const target = Math.floor((discounted * params.bidFractionPercent) / 100);
 
@@ -164,7 +163,7 @@ export function createHeuristicAgent(
           return {
             action: lock,
             diagnostics: {
-              estimatedValueRange: estimate,
+              estimatedValueRange: range,
               riskBand: params.riskBand,
               rationaleCodes: ["lock-after-bid"],
             },
@@ -180,9 +179,9 @@ export function createHeuristicAgent(
           actionWindowId: windowId,
         },
         diagnostics: {
-          estimatedValueRange: estimate,
+          estimatedValueRange: range,
           riskBand: params.riskBand,
-          rationaleCodes: ["value-quantile-bid"],
+          rationaleCodes: ["expected-value-bid"],
         },
       };
     },
@@ -190,7 +189,6 @@ export function createHeuristicAgent(
 }
 
 export const cautiousAppraiserAgent = createHeuristicAgent("cautious-appraiser", "1", {
-  valueQuantile: 25,
   winnerCurseDiscountPercent: 30,
   bidFractionPercent: 70,
   toolEagerness: 85,
@@ -199,7 +197,6 @@ export const cautiousAppraiserAgent = createHeuristicAgent("cautious-appraiser",
 });
 
 export const balancedCalculatorAgent = createHeuristicAgent("balanced-calculator", "1", {
-  valueQuantile: 50,
   winnerCurseDiscountPercent: 15,
   bidFractionPercent: 80,
   toolEagerness: 60,
@@ -208,7 +205,6 @@ export const balancedCalculatorAgent = createHeuristicAgent("balanced-calculator
 });
 
 export const aggressiveChallengerAgent = createHeuristicAgent("aggressive-challenger", "1", {
-  valueQuantile: 70,
   winnerCurseDiscountPercent: 8,
   bidFractionPercent: 90,
   toolEagerness: 40,

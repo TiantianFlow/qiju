@@ -378,7 +378,12 @@ export interface PublicView {
   ruleBundleId: string;
   contentBundleId: string;
   startingBudget: number;
-  /** Conservative lower-bound lot value from legally visible clues only. */
+  /**
+   * Expected lot value from legally visible clues only: exact values where
+   * known, else each object's candidate mean. The single source of truth
+   * consumed by both the player-facing HUD and the built-in agents' bidding
+   * — see estimateExpectedValue in valuation.ts.
+   */
   estimatedValue: number;
   slots: SlotPublicView[];
   board?: LotBoardView;

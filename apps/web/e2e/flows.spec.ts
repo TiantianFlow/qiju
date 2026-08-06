@@ -84,7 +84,10 @@ test.describe("human vs AI match", () => {
     await expect(page.getByTestId("result-board")).toBeVisible();
     await expect(page.getByTestId("result-sold")).toBeVisible();
     await expect(page.getByTestId("result-buyer")).toHaveText("seat2");
-    await expect(page.getByTestId("result-winning-bid")).toHaveText("946,647");
+    // Round-THE-10: winning bid changed when agents switched from a
+    // min/max/quantile blend to observation.estimatedValue (now a true
+    // expected value, not a conservative floor) as their bidding base.
+    await expect(page.getByTestId("result-winning-bid")).toHaveText("885,003");
     await page.getByTestId("restart").click();
     await expect(page.getByTestId("play-vs-ai")).toBeVisible();
   });
