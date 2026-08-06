@@ -690,6 +690,10 @@ button.link {
   font: inherit;
   color: inherit;
   z-index: 1;
+  /* Lets .object-value size itself off the card's own rendered width (cqw)
+     instead of the viewport (vw) — a spanning multi-cell card then gets
+     correctly bigger text than a 1x1 card, regardless of board/viewport size. */
+  container-type: inline-size;
 }
 
 .object-card.anchor-only {
@@ -760,10 +764,19 @@ button.link {
 }
 
 .object-value {
-  font-size: clamp(9px, 1.8vw, 13px);
+  font-size: clamp(8px, 13cqw, 13px);
+  line-height: 1.1;
   color: #ffe08a;
   text-shadow: 0 0 2px #000;
+  text-align: center;
   pointer-events: none;
+  /* Long values (e.g. a 1x1 card showing a 7-figure exact value) wrap to a
+     second line instead of being silently clipped by .object-card's
+     overflow: hidden. min-width: 0 lets this flex child actually shrink
+     below its unwrapped content width so the wrap can happen at all. */
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /*
