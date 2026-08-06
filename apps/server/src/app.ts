@@ -124,6 +124,22 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
         agentById("balanced-calculator")!,
       ],
     },
+    // THE-24: an evicted room's matchId must behave exactly like one that
+    // never existed - close any sockets still pointed at it (same code a
+    // truly-missing match gets on connect) and drop the connections entry
+    // so it doesn't linger as a dead Set nobody ever prunes.
+    onEvict(matchId) {
+      const set = connections.get(matchId);
+      if (!set) return;
+      for (const conn of set) {
+        try {
+          conn.socket.close(4004, "MATCH_NOT_FOUND_OR_FORBIDDEN");
+        } catch {
+          /* already closed */
+        }
+      }
+      connections.delete(matchId);
+    },
   });
 
   const app = Fastify({
@@ -290,7 +306,8 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     build: (ctx: ConnectionContext, seq: number) => ServerEnvelope,
   ): void {
     const set = connections.get(matchId);
-    if (!set) return;
+    if (!set || set.size === 0) return;
+    manager.touch(matchId);
     for (const conn of set) {
       conn.ctx.serverSequence += 1;
       const envelope = build(conn.ctx, conn.ctx.serverSequence);
@@ -304,7 +321,8 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
 
   function pushView(matchId: string, update: ViewUpdate, revision: number): void {
     const set = connections.get(matchId);
-    if (!set) return;
+    if (!set || set.size === 0) return;
+    manager.touch(matchId);
     for (const conn of set) {
       let view: unknown = null;
       if (update.kind === "public" && conn.ctx.isObserver) {
@@ -442,6 +460,11 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
         } catch {
           return;
         }
+        // THE-24: this handler reuses the `room` reference captured once at
+        // connect time rather than calling manager.get() per message, so a
+        // long-lived, actively-used connection needs an explicit touch here
+        // to keep resetting the idle-eviction clock.
+        manager.touch(matchId);
         const obj = parsedJson as { protocolVersion?: number };
         if (obj.protocolVersion !== PROTOCOL_VERSION) {
           ctx.serverSequence += 1;
@@ -557,7 +580,14 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     });
 
     socket.on("close", () => {
-      connections.get(matchId)?.delete(conn);
+      const set = connections.get(matchId);
+      set?.delete(conn);
+      // Prune the now-empty Set rather than leaving a dead entry behind, and
+      // touch the room so a genuine reconnect gets the full idle window
+      // measured from "last actually connected", not from whenever some
+      // earlier, unrelated message happened to arrive.
+      if (set && set.size === 0) connections.delete(matchId);
+      manager.touch(matchId);
     });
   });
 
