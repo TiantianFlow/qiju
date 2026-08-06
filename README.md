@@ -7,6 +7,8 @@ multi-round auction with escalating pass-price thresholds.
 
 **🎲 [Play the live demo →](https://qijugame.com)**
 
+![A Qiju match in progress: a partially revealed lot board, running estimated-value HUD, auction event log, and the sealed-bid dock](./docs/screenshot.png)
+
 Qiju is a from-scratch, deterministic reimplementation — original content,
 original economy, original UI — built as a full-stack TypeScript reference
 project: a pure functional game-core state machine, a Fastify + WebSocket
@@ -103,10 +105,6 @@ pnpm build
 pnpm test:e2e        # Playwright, requires `pnpm build` first
 pnpm guard:content   # forbids private/research identifiers and hardcoded domains in source
 ```
-
-## Screenshot
-
-_placeholder — add a screenshot or GIF of a match in progress here._
 
 ## Project status
 
