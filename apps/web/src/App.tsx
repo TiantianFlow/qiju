@@ -124,10 +124,11 @@ export function App() {
       {view.phase === "setup" && !isObserver ? (
         <SetupPage strings={strings} view={view} connection={connection} />
       ) : view.phase === "completed" ? (
-        <ResultPage strings={strings} view={view} onRestart={goHome} catalog={catalog} />
+        <ResultPage strings={strings} locale={locale} view={view} onRestart={goHome} catalog={catalog} />
       ) : (
         <TablePage
           strings={strings}
+          locale={locale}
           view={view}
           connection={connection}
           isObserver={isObserver}

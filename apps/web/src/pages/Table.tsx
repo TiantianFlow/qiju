@@ -1,7 +1,8 @@
 import { useState } from "react";
-import type { CatalogItem, IntelRecordView, MatchView, PublicEvent, Strings } from "../types";
+import type { CatalogItem, IntelRecordView, Locale, MatchView, PublicEvent, Strings } from "../types";
 import type { MatchConnection } from "../connection";
 import { t } from "../i18n";
+import { formatNumber } from "../format";
 import { SlotCard } from "../components/SlotCard";
 import { LotBoardView } from "../components/LotBoard";
 import { EstimatedValueHUD } from "../components/EstimatedValueHUD";
@@ -18,7 +19,7 @@ function formatShapeId(shapeId: string | undefined): string {
   return shapeId;
 }
 
-function formatEventDescription(strings: Strings, event: PublicEvent): string {
+function formatEventDescription(strings: Strings, locale: Locale, event: PublicEvent): string {
   const params: Record<string, string | number> = { ...event.params };
   if (typeof params.tier === "string") params.tier = t(strings, `tier.${params.tier}`);
   if (typeof params.category === "string") params.category = t(strings, `category.${params.category}`);
@@ -28,15 +29,26 @@ function formatEventDescription(strings: Strings, event: PublicEvent): string {
       params.key = t(strings, `${prefix}.${params.key}`);
     }
   }
+  if (
+    (event.localizationKey === "event.intel.field.value" || event.localizationKey === "event.intel.aggregate.mean") &&
+    typeof params.value === "number"
+  ) {
+    params.value = formatNumber(params.value, locale);
+  }
+  if (event.localizationKey === "event.bidding.sold" && typeof params.amount === "number") {
+    params.amount = formatNumber(params.amount, locale);
+  }
   return t(strings, event.localizationKey, params);
 }
 
 function EventFeed({
   strings,
+  locale,
   events,
   onFocusObject,
 }: {
   strings: Strings;
+  locale: Locale;
   events: PublicEvent[];
   onFocusObject: (revealId: string) => void;
 }) {
@@ -52,7 +64,7 @@ function EventFeed({
             {event.revealIds.length > 0 ? (
               <span className="event-targets">
                 <button className="event-link" onClick={() => onFocusObject(event.revealIds[0]!)}>
-                  {formatEventDescription(strings, event)}
+                  {formatEventDescription(strings, locale, event)}
                 </button>
                 {event.revealIds.length > 1
                   ? event.revealIds.map((id, index) => (
@@ -68,7 +80,7 @@ function EventFeed({
                   : null}
               </span>
             ) : (
-              <span className="event-text">{formatEventDescription(strings, event)}</span>
+              <span className="event-text">{formatEventDescription(strings, locale, event)}</span>
             )}
           </li>
         ))}
@@ -79,11 +91,13 @@ function EventFeed({
 
 function IntelList({
   strings,
+  locale,
   records,
   title,
   hideSlotIds,
 }: {
   strings: Strings;
+  locale: Locale;
   records: IntelRecordView[];
   title: string;
   hideSlotIds?: boolean;
@@ -94,14 +108,14 @@ function IntelList({
       <h4>{title}</h4>
       <ul>
         {records.map((record, i) => (
-          <li key={i}>{describeIntel(strings, record, hideSlotIds === true)}</li>
+          <li key={i}>{describeIntel(strings, locale, record, hideSlotIds === true)}</li>
         ))}
       </ul>
     </section>
   );
 }
 
-function describeIntel(strings: Strings, record: IntelRecordView, hideSlotId: boolean): string {
+function describeIntel(strings: Strings, locale: Locale, record: IntelRecordView, hideSlotId: boolean): string {
   const fact = record.fact;
   if (fact.kind === "exhausted") return "…";
   if (fact.kind === "aggregate") {
@@ -119,7 +133,7 @@ function describeIntel(strings: Strings, record: IntelRecordView, hideSlotId: bo
     }
     return t(strings, "intel.aggregate.mean", {
       key: t(strings, `category.${fact.key}`),
-      value: fact.value,
+      value: formatNumber(fact.value, locale),
     });
   }
   const slot = hideSlotId ? t(strings, "board.unidentified") : fact.slotId;
@@ -133,7 +147,7 @@ function describeIntel(strings: Strings, record: IntelRecordView, hideSlotId: bo
     case "identity":
       return `${slot}: ${t(strings, `item.${fact.itemId}.name`)}`;
     case "value":
-      return `${slot}: ${t(strings, "intel.field.value")} = ${fact.value}`;
+      return `${slot}: ${t(strings, "intel.field.value")} = ${formatNumber(fact.value ?? 0, locale)}`;
     default:
       return slot;
   }
@@ -141,6 +155,7 @@ function describeIntel(strings: Strings, record: IntelRecordView, hideSlotId: bo
 
 export function TablePage({
   strings,
+  locale,
   view,
   connection,
   isObserver,
@@ -148,6 +163,7 @@ export function TablePage({
   catalog,
 }: {
   strings: Strings;
+  locale: Locale;
   view: MatchView;
   connection: MatchConnection;
   isObserver: boolean;
@@ -186,6 +202,7 @@ export function TablePage({
     <main className="table immersive-table" data-testid="immersive-table">
       <EstimatedValueHUD
         strings={strings}
+        locale={locale}
         round={view.round}
         phase={view.phase}
         estimatedValue={view.estimatedValue ?? 0}
@@ -219,6 +236,7 @@ export function TablePage({
           <section className="auction-board" data-testid="auction-board">
             <LotBoardView
               strings={strings}
+              locale={locale}
               board={view.board}
               catalog={catalog}
               focusRevealId={focusRevealId}
@@ -229,7 +247,7 @@ export function TablePage({
         ) : (
           <section className="slots-grid">
             {view.slots.map((slot) => (
-              <SlotCard key={slot.slotId} strings={strings} slot={slot} />
+              <SlotCard key={slot.slotId} strings={strings} locale={locale} slot={slot} />
             ))}
           </section>
         )}
@@ -239,12 +257,14 @@ export function TablePage({
             {view.publicEvents && view.publicEvents.length > 0 ? (
               <EventFeed
                 strings={strings}
+                locale={locale}
                 events={view.publicEvents}
                 onFocusObject={(id) => setFocusRevealId(id)}
               />
             ) : null}
             <IntelList
               strings={strings}
+              locale={locale}
               records={view.publicIntel}
               title={t(strings, "intel.public.title")}
               hideSlotIds={view.board !== undefined}
@@ -252,6 +272,7 @@ export function TablePage({
             {my ? (
               <IntelList
                 strings={strings}
+                locale={locale}
                 records={my.privateIntel}
                 title={t(strings, "intel.private.title")}
                 hideSlotIds={view.board !== undefined}
@@ -278,13 +299,13 @@ export function TablePage({
                       <tr key={`${reveal.kind}-${reveal.round}`}>
                         <td>{reveal.kind === "tiebreak" ? "TB" : reveal.round}</td>
                         {["seat1", "seat2", "seat3", "seat4"].map((s) => (
-                          <td key={s}>{reveal.bids[s] ?? "—"}</td>
+                          <td key={s}>{reveal.bids[s] !== undefined ? formatNumber(reveal.bids[s], locale) : "—"}</td>
                         ))}
                         <td>
                           {reveal.outcome === "sold"
                             ? t(strings, "reveal.sold", {
                                 seat: reveal.buyerSeatId ?? "?",
-                                amount: reveal.winningBid ?? 0,
+                                amount: formatNumber(reveal.winningBid ?? 0, locale),
                               })
                             : reveal.outcome === "continue"
                               ? t(strings, "reveal.continue")
@@ -346,7 +367,7 @@ export function TablePage({
               ) : null}
               {my.currentBid !== undefined ? (
                 <p className="current-bid">
-                  {t(strings, "table.yourBid")}: <strong>{my.currentBid}</strong>
+                  {t(strings, "table.yourBid")}: <strong>{formatNumber(my.currentBid, locale)}</strong>
                 </p>
               ) : null}
               {canLock ? (
@@ -371,6 +392,7 @@ export function TablePage({
 
       <CandidateCatalogModal
         strings={strings}
+        locale={locale}
         catalog={catalog}
         open={catalogOpen}
         onClose={() => setCatalogOpen(false)}

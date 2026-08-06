@@ -1,14 +1,17 @@
-import type { Strings } from "../types";
+import type { Locale, Strings } from "../types";
 import { t } from "../i18n";
+import { formatNumber } from "../format";
 
 export function EstimatedValueHUD({
   strings,
+  locale,
   round,
   phase,
   estimatedValue,
   remainingSeconds,
 }: {
   strings: Strings;
+  locale: Locale;
   round: number;
   phase: string;
   estimatedValue: number;
@@ -31,7 +34,7 @@ export function EstimatedValueHUD({
       )}
       <div className="value-hud-estimate">
         <span className="value-hud-label">{t(strings, "hud.estimatedValue")}</span>
-        <strong data-testid="hud-estimated-value">{estimatedValue.toLocaleString()}</strong>
+        <strong data-testid="hud-estimated-value">{formatNumber(estimatedValue, locale)}</strong>
         <details className="value-hud-hint">
           <summary aria-label={t(strings, "hud.estimatedHint")}>?</summary>
           <p>{t(strings, "hud.estimatedHint")}</p>

@@ -84,7 +84,7 @@ test.describe("human vs AI match", () => {
     await expect(page.getByTestId("result-board")).toBeVisible();
     await expect(page.getByTestId("result-sold")).toBeVisible();
     await expect(page.getByTestId("result-buyer")).toHaveText("seat2");
-    await expect(page.getByTestId("result-winning-bid")).toHaveText("946647");
+    await expect(page.getByTestId("result-winning-bid")).toHaveText("946,647");
     await page.getByTestId("restart").click();
     await expect(page.getByTestId("play-vs-ai")).toBeVisible();
   });

@@ -1,5 +1,6 @@
-import type { Strings } from "../types";
+import type { Locale, Strings } from "../types";
 import { t } from "../i18n";
+import { formatNumber } from "../format";
 
 const SHAPES: Record<string, Array<[number, number]>> = {
   single: [[0, 0]],
@@ -65,9 +66,11 @@ export function ShapeGlyph({ shapeId, size = 30 }: { shapeId: string; size?: num
 
 export function SlotCard({
   strings,
+  locale,
   slot,
 }: {
   strings: Strings;
+  locale: Locale;
   slot: {
     slotId: string;
     knownFields: Partial<{ tier: string; category: string; shape: string; identity: string; value: number }>;
@@ -103,18 +106,23 @@ export function SlotCard({
         {k.value !== undefined && k.identity === undefined ? (
           <>
             <dt>{t(strings, "intel.field.value")}</dt>
-            <dd>{k.value}</dd>
+            <dd>{formatNumber(k.value, locale)}</dd>
           </>
         ) : null}
       </dl>
       {k.identity === undefined ? (
         <div className="slot-candidates" title={t(strings, "table.catalogRange")}>
           <span>{t(strings, "table.candidates", { count: slot.candidates.candidateIds.length })}</span>
-          <span>{t(strings, "table.valueRange", { min: slot.candidates.minValue, max: slot.candidates.maxValue })}</span>
+          <span>
+            {t(strings, "table.valueRange", {
+              min: formatNumber(slot.candidates.minValue, locale),
+              max: formatNumber(slot.candidates.maxValue, locale),
+            })}
+          </span>
         </div>
       ) : (
         <div className="slot-candidates">
-          <span>{k.value}</span>
+          <span>{formatNumber(k.value!, locale)}</span>
         </div>
       )}
     </div>

@@ -13,11 +13,11 @@ test.describe("reconnect and secrecy", () => {
     await expect(page.getByTestId("bid-input")).toBeVisible({ timeout: 30_000 });
     await page.getByTestId("bid-input").fill("1000");
     await page.getByTestId("submit-bid").click();
-    await expect(page.getByText(/你的报价: 1000|Your bid: 1000/)).toBeVisible();
+    await expect(page.getByText(/你的报价: 1,000|Your bid: 1,000/)).toBeVisible();
 
     await page.reload();
     await expect(page.getByTestId("bid-input")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText(/你的报价: 1000|Your bid: 1000/)).toBeVisible();
+    await expect(page.getByText(/你的报价: 1,000|Your bid: 1,000/)).toBeVisible();
   });
 
   test("a stranger cannot read another guest's seat view", async ({ page, context }) => {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CatalogItem, LotBoard, RevealedObject, Strings } from "../types";
+import type { CatalogItem, Locale, LotBoard, RevealedObject, Strings } from "../types";
 import { t } from "../i18n";
+import { formatNumber } from "../format";
 
 const TIER_CLASS: Record<string, string> = {
   documented: "tier-documented",
@@ -36,6 +37,7 @@ interface PlacedObject {
 
 export function LotBoardView({
   strings,
+  locale,
   board,
   catalog,
   focusRevealId,
@@ -43,6 +45,7 @@ export function LotBoardView({
   onCatalogLookup,
 }: {
   strings: Strings;
+  locale: Locale;
   board: LotBoard;
   catalog?: CatalogItem[] | undefined;
   focusRevealId?: string | undefined;
@@ -195,7 +198,7 @@ export function LotBoardView({
                     "--obj-h": height,
                   } as React.CSSProperties
                 }
-                aria-label={t(strings, "board.cell.revealed", { detail: describeObject(strings, object) })}
+                aria-label={t(strings, "board.cell.revealed", { detail: describeObject(strings, locale, object) })}
                 data-testid={`object-${object.revealId}`}
                 data-width={anchorOnly ? undefined : width}
                 data-height={anchorOnly ? undefined : height}
@@ -213,7 +216,7 @@ export function LotBoardView({
                   <span className="object-name">{t(strings, `item.${object.identity}.name`)}</span>
                 ) : null}
                 {object.exactValue !== undefined && !object.identity ? (
-                  <span className="object-value">{object.exactValue}</span>
+                  <span className="object-value">{formatNumber(object.exactValue, locale)}</span>
                 ) : null}
               </button>
             );
@@ -236,7 +239,7 @@ export function LotBoardView({
                     })
                   : t(strings, "intel.aggregate.mean", {
                       key: t(strings, `category.${fact.key}`),
-                      value: fact.value,
+                      value: formatNumber(fact.value, locale),
                     })}
             </li>
           ))}
@@ -298,11 +301,11 @@ export function LotBoardView({
             <dt>{t(strings, "intel.field.value")}</dt>
             <dd>
               {focusedObject.exactValue !== undefined
-                ? focusedObject.exactValue
+                ? formatNumber(focusedObject.exactValue, locale)
                 : focusedObject.candidateSummary
                   ? t(strings, "table.valueRange", {
-                      min: focusedObject.candidateSummary.minValue,
-                      max: focusedObject.candidateSummary.maxValue,
+                      min: formatNumber(focusedObject.candidateSummary.minValue, locale),
+                      max: formatNumber(focusedObject.candidateSummary.maxValue, locale),
                     })
                   : t(strings, "board.unknown")}
             </dd>
@@ -325,7 +328,7 @@ export function LotBoardView({
                       </span>
                       <span className="candidate-name">{t(strings, `item.${item.id}.name`)}</span>
                       <span className="candidate-category">{t(strings, `category.${item.category}`)}</span>
-                      <span className="candidate-value">{item.value.toLocaleString()}</span>
+                      <span className="candidate-value">{formatNumber(item.value, locale)}</span>
                     </li>
                   ))}
               </ul>
@@ -360,12 +363,12 @@ function rectOf(cells: Array<{ x: number; y: number }>): { width: number; height
   return { width: Math.max(...xs) - Math.min(...xs) + 1, height: Math.max(...ys) - Math.min(...ys) + 1 };
 }
 
-function describeObject(strings: Strings, obj: RevealedObject): string {
+function describeObject(strings: Strings, locale: Locale, obj: RevealedObject): string {
   const parts: string[] = [];
   if (obj.identity) parts.push(t(strings, `item.${obj.identity}.name`));
   else if (obj.tier) parts.push(t(strings, `tier.${obj.tier}`));
   else if (obj.category) parts.push(t(strings, `category.${obj.category}`));
   else if (obj.cells) parts.push(t(strings, "board.shapeOnly"));
-  else if (obj.exactValue !== undefined) parts.push(String(obj.exactValue));
+  else if (obj.exactValue !== undefined) parts.push(formatNumber(obj.exactValue, locale));
   return parts.join(" ") || t(strings, "board.unidentified");
 }

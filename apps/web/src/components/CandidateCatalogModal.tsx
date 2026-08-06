@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import type { CatalogItem, Strings } from "../types";
+import type { CatalogItem, Locale, Strings } from "../types";
 import { t } from "../i18n";
+import { formatNumber } from "../format";
 
 const TIERS = ["documented", "scarce", "exceptional", "singular"] as const;
 const CATEGORIES = ["artifact", "geology", "mechanism", "botany", "ephemera", "anomaly"] as const;
@@ -13,12 +14,14 @@ export interface CatalogFilterPrefill {
 
 export function CandidateCatalogModal({
   strings,
+  locale,
   catalog,
   open,
   onClose,
   prefill,
 }: {
   strings: Strings;
+  locale: Locale;
   catalog: CatalogItem[];
   open: boolean;
   onClose: () => void;
@@ -142,7 +145,7 @@ export function CandidateCatalogModal({
                     {t(strings, "catalog.size")}: {item.footprint.width}×{item.footprint.height}
                   </span>
                   <span>
-                    {t(strings, "catalog.value")}: {item.value.toLocaleString()}
+                    {t(strings, "catalog.value")}: {formatNumber(item.value, locale)}
                   </span>
                 </div>
               </li>

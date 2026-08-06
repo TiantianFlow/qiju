@@ -1,14 +1,17 @@
-import type { CatalogItem, MatchView, Strings } from "../types";
+import type { CatalogItem, Locale, MatchView, Strings } from "../types";
 import { t } from "../i18n";
+import { formatNumber } from "../format";
 import { LotBoardView } from "../components/LotBoard";
 
 export function ResultPage({
   strings,
+  locale,
   view,
   onRestart,
   catalog,
 }: {
   strings: Strings;
+  locale: Locale;
   view: MatchView;
   onRestart: () => void;
   catalog?: CatalogItem[];
@@ -41,10 +44,11 @@ export function ResultPage({
             {t(strings, labelKey)})
           </p>
           <p>
-            {t(strings, "result.winningBid")}: <strong data-testid="result-winning-bid">{acq.winningBid}</strong>
+            {t(strings, "result.winningBid")}:{" "}
+            <strong data-testid="result-winning-bid">{formatNumber(acq.winningBid ?? 0, locale)}</strong>
           </p>
           <p>
-            {t(strings, "result.actualValue")}: <strong>{actualValue}</strong>
+            {t(strings, "result.actualValue")}: <strong>{formatNumber(actualValue, locale)}</strong>
           </p>
         </section>
       ) : (
@@ -53,7 +57,7 @@ export function ResultPage({
       {view.board ? (
         <section data-testid="result-board">
           <h3>{t(strings, "result.lotBoard")}</h3>
-          <LotBoardView strings={strings} board={view.board} catalog={catalog} />
+          <LotBoardView strings={strings} locale={locale} board={view.board} catalog={catalog} />
         </section>
       ) : null}
       <section>
@@ -74,8 +78,8 @@ export function ResultPage({
                   {entry.seatId}
                   {view.mySeat && entry.seatId === view.mySeat.seatId ? ` (${t(strings, "table.you")})` : ""}
                 </td>
-                <td>{entry.realizedProfit}</td>
-                <td>{entry.bonusReward}</td>
+                <td>{formatNumber(entry.realizedProfit, locale)}</td>
+                <td>{formatNumber(entry.bonusReward, locale)}</td>
                 <td>{entry.denseEconomicRank}</td>
               </tr>
             ))}
@@ -90,7 +94,7 @@ export function ResultPage({
               <tr key={`${reveal.kind}-${reveal.round}`}>
                 <td>{reveal.kind === "tiebreak" ? "TB" : reveal.round}</td>
                 {["seat1", "seat2", "seat3", "seat4"].map((s) => (
-                  <td key={s}>{reveal.bids[s] ?? "—"}</td>
+                  <td key={s}>{reveal.bids[s] !== undefined ? formatNumber(reveal.bids[s], locale) : "—"}</td>
                 ))}
               </tr>
             ))}
