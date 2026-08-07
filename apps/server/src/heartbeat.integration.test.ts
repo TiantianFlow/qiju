@@ -1,6 +1,7 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
+import { RoomManager } from "@qiju/session-runtime";
 import { buildApp } from "./app.js";
 
 const HEARTBEAT_MS = 150;
@@ -39,6 +40,10 @@ describe("websocket heartbeat (short interval)", () => {
 
   afterAll(async () => {
     await app.close();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   async function createMatch(mode: "all-ai" | "human-vs-ai", seed?: string) {
@@ -90,6 +95,23 @@ describe("websocket heartbeat (short interval)", () => {
     const closed = new Promise<number>((resolve) => ws.once("close", (code) => resolve(code)));
     const code = await closed;
     expect(code).toBe(1006);
+  });
+
+  it("heartbeat termination of an unresponsive socket does not touch the room (THE-24 idle clock)", async () => {
+    const { matchId, cookie } = await createMatch("all-ai", "hb-no-touch-1");
+    const { ws } = connect(matchId, cookie, { autoPong: false });
+    await waitOpen(ws);
+    // Let connect-time activity settle, then watch for any touch of THIS room.
+    const touchSpy = vi.spyOn(RoomManager.prototype, "touch");
+    await wait(50);
+    touchSpy.mockClear();
+
+    const closed = new Promise<number>((resolve) => ws.once("close", (code) => resolve(code)));
+    const code = await closed;
+    expect(code).toBe(1006);
+    // Give any post-teardown touch a window to land before asserting.
+    await wait(HEARTBEAT_MS * 2);
+    expect(touchSpy.mock.calls.some(([id]) => id === matchId)).toBe(false);
   });
 
   it("serves the current snapshot to a reconnecting client", async () => {

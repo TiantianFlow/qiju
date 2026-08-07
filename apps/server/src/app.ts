@@ -108,7 +108,10 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
 
   const runtime = compileDemoV2();
   const clock = new SystemClock();
-  const connections = new Map<string, Set<{ socket: WebSocket; ctx: ConnectionContext; isAlive: boolean }>>();
+  const connections = new Map<
+    string,
+    Set<{ socket: WebSocket; ctx: ConnectionContext; isAlive: boolean; terminatedByHeartbeat: boolean }>
+  >();
 
   const manager = new RoomManager({
     runtime,
@@ -189,6 +192,11 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     for (const set of connections.values()) {
       for (const conn of set) {
         if (!conn.isAlive) {
+          // Flag before terminating so the close handler can tell this
+          // heartbeat-initiated teardown apart from a genuine user/network
+          // close and skip its manager.touch() — a dead socket must not
+          // reset the THE-24 idle-eviction clock.
+          conn.terminatedByHeartbeat = true;
           try {
             conn.socket.terminate();
           } catch {
@@ -432,7 +440,7 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
       isObserver: room.mode === "all-ai",
       serverSequence: 0,
     };
-    const conn = { socket, ctx, isAlive: true };
+    const conn = { socket, ctx, isAlive: true, terminatedByHeartbeat: false };
     socket.on("pong", () => {
       conn.isAlive = true;
     });
@@ -621,9 +629,12 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
       // Prune the now-empty Set rather than leaving a dead entry behind, and
       // touch the room so a genuine reconnect gets the full idle window
       // measured from "last actually connected", not from whenever some
-      // earlier, unrelated message happened to arrive.
+      // earlier, unrelated message happened to arrive. Exception: a socket
+      // the THE-26 heartbeat itself terminated was already unresponsive —
+      // its teardown is not activity and must not reset the THE-24
+      // idle-eviction clock.
       if (set && set.size === 0) connections.delete(matchId);
-      manager.touch(matchId);
+      if (!conn.terminatedByHeartbeat) manager.touch(matchId);
     });
   });
 
