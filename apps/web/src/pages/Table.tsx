@@ -3,6 +3,7 @@ import type { CatalogItem, IntelRecordView, Locale, MatchView, PublicEvent, Stri
 import type { MatchConnection } from "../connection";
 import { t } from "../i18n";
 import { formatNumber } from "../format";
+import { normalizeBidInput } from "../bid";
 import { SlotCard } from "../components/SlotCard";
 import { LotBoardView } from "../components/LotBoard";
 import { EstimatedValueHUD } from "../components/EstimatedValueHUD";
@@ -171,6 +172,10 @@ export function TablePage({
   catalog: CatalogItem[];
 }) {
   const [bidInput, setBidInput] = useState("");
+  // THE-28: remember the last bid that was truncated to the budget so a
+  // persistent inline notice can explain why the submitted amount changed.
+  // Tagged with the action window id so the notice never leaks into a new window.
+  const [bidCapNotice, setBidCapNotice] = useState<{ windowId: string; amount: number } | null>(null);
   const [focusRevealId, setFocusRevealId] = useState<string | undefined>(undefined);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [catalogPrefill, setCatalogPrefill] = useState<CatalogFilterPrefill | null>(null);
@@ -191,6 +196,16 @@ export function TablePage({
   const submitBid = (amount: number) => {
     if (!window) return;
     connection.sendCommand({ type: "submit_bid", amount, actionWindowId: window.actionWindowId });
+  };
+
+  const submitBidFromInput = () => {
+    if (!window) return;
+    const { amount, wasCapped } = normalizeBidInput(bidInput, 0, view.startingBudget);
+    // Sync the visible input to the amount actually submitted, and surface the
+    // truncation when the bid had to be capped to the player's budget (THE-28).
+    setBidInput(String(amount));
+    setBidCapNotice(wasCapped ? { windowId: window.actionWindowId, amount } : null);
+    submitBid(amount);
   };
 
   const openCatalog = (prefill?: CatalogFilterPrefill) => {
@@ -352,19 +367,24 @@ export function TablePage({
                       min={0}
                       max={view.startingBudget}
                       value={bidInput}
-                      onChange={(e) => setBidInput(e.target.value)}
+                      onChange={(e) => {
+                        setBidInput(e.target.value);
+                        setBidCapNotice(null);
+                      }}
                       data-testid="bid-input"
                     />
-                    <button
-                      onClick={() => submitBid(Math.max(0, Math.min(view.startingBudget, Number(bidInput) || 0)))}
-                      data-testid="submit-bid"
-                    >
+                    <button onClick={submitBidFromInput} data-testid="submit-bid">
                       {t(strings, "table.submitBid")}
                     </button>
                     <button onClick={() => submitBid(0)} data-testid="pass-bid">
                       {t(strings, "table.pass")}
                     </button>
                   </div>
+                  {bidCapNotice && window && bidCapNotice.windowId === window.actionWindowId ? (
+                    <p role="status" className="bid-cap-notice" data-testid="bid-cap-notice">
+                      {t(strings, "table.bidCapped", { amount: formatNumber(bidCapNotice.amount, locale) })}
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
               {my.currentBid !== undefined ? (
