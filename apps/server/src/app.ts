@@ -47,6 +47,9 @@ const envSchema = z.object({
   // Cookie domain shared between frontend/backend subdomains of the same
   // parent domain (e.g. ".example.com"). Unset means host-only cookie.
   COOKIE_DOMAIN: z.string().optional(),
+  // THE-26: app-level WebSocket heartbeat interval. 30s default safely
+  // undercuts Cloudflare's 100s idle-connection timeout (bid window is 120s).
+  WS_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(50).default(30_000),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;
@@ -105,7 +108,7 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
 
   const runtime = compileDemoV2();
   const clock = new SystemClock();
-  const connections = new Map<string, Set<{ socket: WebSocket; ctx: ConnectionContext }>>();
+  const connections = new Map<string, Set<{ socket: WebSocket; ctx: ConnectionContext; isAlive: boolean }>>();
 
   const manager = new RoomManager({
     runtime,
@@ -174,6 +177,36 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     max: 240,
     timeWindow: "1 minute",
     errorResponseBuilder: () => ({ error: "RATE_LIMITED" }),
+  });
+
+  // THE-26: one heartbeat timer per app (not per socket). Each tick terminates
+  // sockets that failed to pong the previous ping, then marks the rest dead
+  // and pings them; a `pong` flips `isAlive` back (registered at connect).
+  // Protocol-level ping/pong only: no JSON envelope, no serverSequence bump,
+  // no revision/deadline change, and deliberately no manager.touch() so the
+  // THE-24 idle-eviction clock is never reset by heartbeats alone.
+  const heartbeatTimer = setInterval(() => {
+    for (const set of connections.values()) {
+      for (const conn of set) {
+        if (!conn.isAlive) {
+          try {
+            conn.socket.terminate();
+          } catch {
+            /* already closed */
+          }
+          continue;
+        }
+        conn.isAlive = false;
+        try {
+          conn.socket.ping();
+        } catch {
+          /* already closed */
+        }
+      }
+    }
+  }, env.WS_HEARTBEAT_INTERVAL_MS);
+  app.addHook("onClose", async () => {
+    clearInterval(heartbeatTimer);
   });
 
   function resolvePrincipal(request: FastifyRequest, reply: FastifyReply): string {
@@ -399,7 +432,10 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
       isObserver: room.mode === "all-ai",
       serverSequence: 0,
     };
-    const conn = { socket, ctx };
+    const conn = { socket, ctx, isAlive: true };
+    socket.on("pong", () => {
+      conn.isAlive = true;
+    });
     let set = connections.get(matchId);
     if (!set) {
       set = new Set();
