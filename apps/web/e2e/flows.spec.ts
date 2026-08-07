@@ -129,6 +129,33 @@ test.describe("human vs AI match", () => {
     expect(later).toBeGreaterThan(first - 8);
   });
 
+  test("over-budget bid is visibly capped to the budget and the notice clears on the next in-budget bid", async ({ page }) => {
+    test.setTimeout(90_000);
+    await openSeededHuman(page, "bid-cap-seed-1");
+    await page.getByTestId("analyst-analyst.appraiser").click();
+    await page.getByTestId("kit-kit.appraisal").click();
+    await page.getByTestId("lock-setup").click();
+
+    const bidInput = page.getByTestId("bid-input");
+    await expect(bidInput).toBeVisible({ timeout: 20_000 });
+
+    // 10M with a 2M budget: submitted at the cap, input synced, notice shown.
+    await bidInput.fill("10000000");
+    await page.getByTestId("submit-bid").click();
+    const capNotice = page.getByTestId("bid-cap-notice");
+    await expect(capNotice).toBeVisible();
+    await expect(capNotice).toHaveText("已按预算上限截断为 2,000,000");
+    await expect(bidInput).toHaveValue("2000000");
+    await expect(page.locator(".current-bid strong")).toHaveText("2,000,000");
+
+    // A subsequent in-budget bid goes through unchanged and clears the notice.
+    await bidInput.fill("500000");
+    await page.getByTestId("submit-bid").click();
+    await expect(capNotice).toHaveCount(0);
+    await expect(bidInput).toHaveValue("500000");
+    await expect(page.locator(".current-bid strong")).toHaveText("500,000");
+  });
+
   test("deadline survives reload and the server closes the window at 120s", async ({ page }) => {
     test.setTimeout(200_000);
     await openSeededHuman(page, "timer-seed-2");
