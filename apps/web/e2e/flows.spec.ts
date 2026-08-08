@@ -58,22 +58,46 @@ test.describe("human vs AI match", () => {
     for (let round = 0; round < 8; round++) {
       if (await page.getByTestId("restart").isVisible().catch(() => false)) break;
       const bidInput = page.getByTestId("bid-input");
-      if (!(await bidInput.isVisible().catch(() => false))) {
-        await expect
-          .poll(async () => (await page.getByTestId("restart").isVisible().catch(() => false)) || (await bidInput.isVisible().catch(() => false)), {
-            timeout: 30_000,
-          })
-          .toBeTruthy();
-      }
-      if (await page.getByTestId("restart").isVisible().catch(() => false)) break;
-      await submitAndLockBid(page, "0");
-      const hud = page.getByTestId("value-hud");
-      const before = (await hud.textContent().catch(() => "")) ?? "";
+      // Wait for the next actionable state. isVisible() never auto-waits, so a
+      // round view that unmounts mid-poll cannot hang the predicate.
       await expect
         .poll(
           async () => {
             if (await page.getByTestId("restart").isVisible().catch(() => false)) return "done";
-            return (await hud.textContent().catch(() => "")) ?? "";
+            if (await bidInput.isVisible().catch(() => false)) return "bidding";
+            return "transition";
+          },
+          { timeout: 30_000 },
+        )
+        .not.toBe("transition");
+      if (await page.getByTestId("restart").isVisible().catch(() => false)) break;
+      // The state observed above can still be invalidated by a round
+      // transition before the actions land (check-then-act). The only
+      // legitimate invalidation is the match completing; anything else is a
+      // genuine failure and rethrows.
+      try {
+        await submitAndLockBid(page, "0");
+      } catch (err) {
+        if (await page.getByTestId("restart").isVisible().catch(() => false)) break;
+        throw err;
+      }
+      const hud = page.getByTestId("value-hud");
+      // Bounded reads only: value-hud is gone for good once the result page
+      // mounts, so an unbounded textContent() here or in the poll below can
+      // hang the predicate until the poll timeout (observed on CI runners).
+      const before = await hud.textContent({ timeout: 5_000 }).catch(() => null);
+      if (before === null) {
+        // Transitioned before the HUD could be sampled; resync next round.
+        if (await page.getByTestId("restart").isVisible().catch(() => false)) break;
+        continue;
+      }
+      await expect
+        .poll(
+          async () => {
+            if (await page.getByTestId("restart").isVisible().catch(() => false)) return "done";
+            // Mid-transition the HUD is detached: report "unchanged" and let
+            // the poll re-check, instead of auto-waiting forever.
+            return (await hud.textContent({ timeout: 1_000 }).catch(() => null)) ?? before;
           },
           { timeout: 45_000 },
         )
@@ -242,12 +266,15 @@ test.describe("human vs AI match", () => {
     expect(seconds).toBeGreaterThan(0);
 
     const hud = page.getByTestId("value-hud");
-    const before = (await hud.textContent().catch(() => "")) ?? "";
+    const before = (await hud.textContent({ timeout: 5_000 }).catch(() => "")) ?? "";
     await expect
       .poll(
         async () => {
           if (await page.getByTestId("restart").isVisible().catch(() => false)) return "done";
-          return (await hud.textContent().catch(() => "")) ?? "";
+          // Bounded read: value-hud detaches for good once the match ends, and
+          // an unbounded textContent() would hang this predicate until the
+          // poll timeout (same race as the sold-match loop above).
+          return (await hud.textContent({ timeout: 1_000 }).catch(() => null)) ?? before;
         },
         { timeout: 140_000 },
       )
@@ -616,7 +643,15 @@ test.describe("Round-5 gallery showcase, overlay toggle and pinned bid dock", ()
       expect(dockBox!.y).toBeGreaterThanOrEqual(0);
       expect(dockBox!.y + dockBox!.height).toBeLessThanOrEqual(viewportSize.height + 1);
       await expect(page.getByTestId("submit-bid")).toBeVisible();
-      await submitAndLockBid(page, "0");
+      // sold-seed-a settles after round 3, so the final lock can end the
+      // match mid-action and detach the controls. That is the loop's normal
+      // exit — anything else rethrows.
+      try {
+        await submitAndLockBid(page, "0");
+      } catch (err) {
+        if (await page.getByTestId("restart").isVisible().catch(() => false)) break;
+        throw err;
+      }
       await page.waitForTimeout(300);
     }
   });
