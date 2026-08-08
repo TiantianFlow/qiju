@@ -33,7 +33,7 @@ test.describe("home page", () => {
     await expect(page.getByTestId("watch-demo")).toBeVisible();
     await page.getByTestId("locale-select").selectOption("en");
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Qiju");
-    await expect(page.getByTestId("play-vs-ai")).toContainText("Play vs Human");
+    await expect(page.getByTestId("play-vs-ai")).toContainText("Play vs AI");
   });
 
   test("language switch does not lose page state", async ({ page }) => {
