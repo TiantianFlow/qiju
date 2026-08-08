@@ -3,7 +3,11 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "e2e",
   timeout: 90_000,
-  retries: 0,
+  // CI runners are shared and much slower than a dev machine; a single retry
+  // absorbs environment timing stalls (observed: a round-advance poll
+  // exceeding its 45s budget once on a fresh runner) without weakening any
+  // assertion — a genuinely broken expectation fails every attempt.
+  retries: process.env.CI ? 1 : 0,
   workers: 1,
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
