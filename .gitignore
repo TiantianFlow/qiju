@@ -7,6 +7,9 @@ test-results/
 data/
 .DS_Store
 
+# Maestri-generated per-session role scaffolding (worktree-local, not source)
+.maestri/
+
 # Local env files (never commit real secrets/domains) — .env.example files
 # are intentionally kept.
 .env
