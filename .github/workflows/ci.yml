@@ -2,9 +2,7 @@ name: CI
 
 on:
   push:
-    # TODO(THE-21 demonstration): agent branch trigger is temporary, removed
-    # before handoff; keep [master] only.
-    branches: [master, agent/the-21-ci-full-gates-b01]
+    branches: [master]
   pull_request:
     branches: [master]
 
