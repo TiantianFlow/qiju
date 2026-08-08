@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    # TODO(THE-21 demonstration): agent branch trigger is temporary, removed
+    # before handoff; keep [master] only.
+    branches: [master, agent/the-21-ci-full-gates-b01]
   pull_request:
     branches: [master]
 
@@ -39,3 +41,36 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      - name: Integration tests
+        run: pnpm test:integration
+
+      - name: Arena smoke
+        run: pnpm arena:smoke
+
+      # Cache browser binaries across runs; install is a fast no-op on a hit.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+
+      # e2e has no `projects` configured, so it runs Chromium only.
+      - name: Install Playwright browsers
+        run: pnpm --filter @qiju/web exec playwright install --with-deps chromium
+
+      # Playwright's webServer starts the server itself (see
+      # apps/web/playwright.config.ts) and waits on /health/live.
+      - name: E2E tests
+        run: pnpm test:e2e
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

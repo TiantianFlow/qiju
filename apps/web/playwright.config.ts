@@ -8,6 +8,9 @@ export default defineConfig({
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
     viewport: { width: 1280, height: 800 },
+    // Keep a trace for failed tests so CI failures are debuggable from the
+    // uploaded artifacts without local reproduction.
+    trace: "retain-on-failure",
   },
   webServer: process.env.E2E_NO_SERVER
     ? undefined
