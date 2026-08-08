@@ -192,7 +192,13 @@ export function generateLotWithStreams(
 function layoutBoard(
   runtime: CompiledRuleRuntime,
   slots: Array<{ slotId: SlotId; itemId: ItemId }>,
-  policy: { width: number; height: number; maxAttempts: number },
+  policy: {
+    width: number;
+    height: number;
+    maxAttempts: number;
+    minOccupiedRows?: number;
+    maxOccupiedRows?: number;
+  },
   rng: Xoshiro128StarStar,
 ): LotPlacement[] {
   const rects = slots.map((slot) => {
@@ -207,8 +213,20 @@ function layoutBoard(
     throw new Error(`layout infeasible: ${cellsTotal} cells > board ${policy.width * policy.height}`);
   }
 
+  // THE-35: when the policy names an occupied-row target, spread placements
+  // vertically instead of dense top-packing (see tryBacktrackingLayout).
+  const spread =
+    policy.minOccupiedRows !== undefined && policy.maxOccupiedRows !== undefined
+      ? {
+          minRows: policy.minOccupiedRows,
+          maxRows: policy.maxOccupiedRows,
+          cellsTotal,
+          tallest: rects.reduce((a, r) => Math.max(a, r.height), 0),
+        }
+      : undefined;
+
   for (let attempt = 0; attempt < policy.maxAttempts; attempt++) {
-    const placements = tryBacktrackingLayout(order, policy, rng);
+    const placements = tryBacktrackingLayout(order, policy, rng, spread);
     if (placements) {
       const bySlot = new Map(placements.map((p) => [p.slotId, p]));
       return slots.map((s) => bySlot.get(s.slotId)!);
@@ -229,12 +247,28 @@ function tryBacktrackingLayout(
   order: Array<{ slotId: SlotId; width: number; height: number }>,
   policy: { width: number; height: number },
   rng: Xoshiro128StarStar,
+  spread?: { minRows: number; maxRows: number; cellsTotal: number; tallest: number },
 ): LotPlacement[] | null {
+  // THE-35 spread mode: pick a deterministic target row span within the
+  // configured band, bounded below by what the lot physically needs (tallest
+  // item, ceil(totalCells / width)) and above by the board height, then pack
+  // within that many rows with anchors shuffled across rows. A completed
+  // layout is accepted only if its actual occupied span reaches the minimum,
+  // so the board visibly uses a 6-15 row band instead of collapsing to 3-4.
+  let bandHeight = policy.height;
+  let spanFloor = 0;
+  if (spread) {
+    const needed = Math.max(spread.minRows, spread.tallest, Math.ceil(spread.cellsTotal / policy.width));
+    const bandMax = Math.min(spread.maxRows, policy.height);
+    spanFloor = Math.min(needed, bandMax);
+    bandHeight = spanFloor + rng.nextBelow(bandMax - spanFloor + 1);
+  }
+
   const occupied = new Uint8Array(policy.width * policy.height);
   const placements: LotPlacement[] = [];
 
   const fits = (anchorX: number, anchorY: number, w: number, h: number): boolean => {
-    if (anchorX + w > policy.width || anchorY + h > policy.height) return false;
+    if (anchorX + w > policy.width || anchorY + h > bandHeight) return false;
     for (let dy = 0; dy < h; dy++) {
       for (let dx = 0; dx < w; dx++) {
         if (occupied[(anchorY + dy) * policy.width + (anchorX + dx)]) return false;
@@ -254,26 +288,38 @@ function tryBacktrackingLayout(
     if (index === order.length) return true;
     const rect = order[index]!;
     const candidates: Array<{ x: number; y: number }> = [];
-    for (let y = 0; y <= policy.height - rect.height; y++) {
+    for (let y = 0; y <= bandHeight - rect.height; y++) {
       for (let x = 0; x <= policy.width - rect.width; x++) {
         if (fits(x, y, rect.width, rect.height)) candidates.push({ x, y });
       }
     }
-    // Dense clustering (Slice 2): candidates are already row-major (y then x)
-    // from the scan above. Shuffle only within each same-row run instead of
-    // across the whole board, so placement stays biased toward the topmost
-    // open rows — objects cluster near the top of the showcase rather than
-    // scattering across empty rows that would tip off the board's true extent.
-    let runStart = 0;
-    for (let i = 1; i <= candidates.length; i++) {
-      if (i === candidates.length || candidates[i]!.y !== candidates[runStart]!.y) {
-        for (let k = i - 1; k > runStart; k--) {
-          const j = runStart + rng.nextBelow(k - runStart + 1);
-          const tmp = candidates[k]!;
-          candidates[k] = candidates[j]!;
-          candidates[j] = tmp;
+    if (spread) {
+      // Spread mode (THE-35): shuffle anchors across the whole target band so
+      // placements scatter over the band's rows rather than filling the
+      // topmost open rows first.
+      for (let k = candidates.length - 1; k > 0; k--) {
+        const j = rng.nextBelow(k + 1);
+        const tmp = candidates[k]!;
+        candidates[k] = candidates[j]!;
+        candidates[j] = tmp;
+      }
+    } else {
+      // Dense clustering (Slice 2): candidates are already row-major (y then x)
+      // from the scan above. Shuffle only within each same-row run instead of
+      // across the whole board, so placement stays biased toward the topmost
+      // open rows — objects cluster near the top of the showcase rather than
+      // scattering across empty rows that would tip off the board's true extent.
+      let runStart = 0;
+      for (let i = 1; i <= candidates.length; i++) {
+        if (i === candidates.length || candidates[i]!.y !== candidates[runStart]!.y) {
+          for (let k = i - 1; k > runStart; k--) {
+            const j = runStart + rng.nextBelow(k - runStart + 1);
+            const tmp = candidates[k]!;
+            candidates[k] = candidates[j]!;
+            candidates[j] = tmp;
+          }
+          runStart = i;
         }
-        runStart = i;
       }
     }
     for (const c of candidates) {
@@ -292,7 +338,15 @@ function tryBacktrackingLayout(
     return false;
   };
 
-  return place(0) ? placements : null;
+  if (!place(0)) return null;
+  if (spread) {
+    let maxY = -1;
+    for (const p of placements) {
+      for (const c of p.cells) maxY = Math.max(maxY, c.y);
+    }
+    if (maxY + 1 < spanFloor) return null;
+  }
+  return placements;
 }
 
 const SHAPE_DEF_LOOKUP: Map<string, { id: string; cells: Array<{ x: number; y: number }> }> =

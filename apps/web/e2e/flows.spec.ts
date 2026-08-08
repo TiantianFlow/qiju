@@ -87,9 +87,12 @@ test.describe("human vs AI match", () => {
     // Pinned to prove determinism: the same seed must always produce the same
     // winning bid. Expect this value to change whenever agent bid math changes
     // — THE-10 moved it (expected-value base), THE-23 moved it again
-    // (per-round budget-exposure cap). Re-pin, don't loosen: a range assertion
-    // here would stop detecting the non-determinism this exists to catch.
-    await expect(page.getByTestId("result-winning-bid")).toHaveText("638,471");
+    // (per-round budget-exposure cap), THE-35 moved it again (new V2 board
+    // policy fields changed the content hash, reseeding every engine RNG
+    // stream; the seed still settles sold with buyer seat2). Re-pin, don't
+    // loosen: a range assertion here would stop detecting the non-determinism
+    // this exists to catch.
+    await expect(page.getByTestId("result-winning-bid")).toHaveText("339,990");
     await page.getByTestId("restart").click();
     await expect(page.getByTestId("play-vs-ai")).toBeVisible();
   });
@@ -98,7 +101,11 @@ test.describe("human vs AI match", () => {
     test.setTimeout(180_000);
     // Round-5: re-pinned — the high-variance v2 catalog rework changed lot
     // contents/values enough that the old seed now resolves to a sale.
-    await openSeededDemo(page, "nosale-demo-c");
+    // THE-35: re-pinned again — the new V2 board policy fields changed the
+    // content hash and reseeded the RNG streams, flipping "nosale-demo-c" to a
+    // sale. "nosale-demo-a" is verified (headless scan with the server's exact
+    // all-AI agent pool) to end in a genuine tiebreak_tie no-sale.
+    await openSeededDemo(page, "nosale-demo-a");
     await page.getByTestId("demo-speed").selectOption("8");
     await page.getByTestId("demo-resume").click();
     await expect(page.getByTestId("restart")).toBeVisible({ timeout: 120_000 });

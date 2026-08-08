@@ -56,7 +56,13 @@ export interface CompiledRuleRuntime {
     slotCount?: number;
     countMin?: number;
     countMax?: number;
-    board?: { width: number; height: number; maxAttempts: number };
+    board?: {
+      width: number;
+      height: number;
+      maxAttempts: number;
+      minOccupiedRows?: number;
+      maxOccupiedRows?: number;
+    };
   };
   publicIntelSchedule?: IntelEffectRuntime[];
   publicIntelPool?: Array<{ id: string; weight: number; selector: SelectorRuntime }>;

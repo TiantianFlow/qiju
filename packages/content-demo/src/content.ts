@@ -648,7 +648,9 @@ export function buildContentSyntheticV2(): ContentSyntheticV2 {
       countMax: 12,
       // Tall gallery board (Slice 2): generous cell budget for rare multi-legendary
       // draws (worst case ~105 cells) plus a scrollable "long showcase" viewport.
-      board: { width: 10, height: 20, maxAttempts: 64 },
+      // THE-35: spread layouts over a 6-15 occupied-row band instead of dense
+      // top-packing, which collapsed most lots into 3-4 rows.
+      board: { width: 10, height: 20, maxAttempts: 64, minOccupiedRows: 6, maxOccupiedRows: 15 },
     },
     publicIntelPool: buildPublicIntelPoolV1(),
     analysts: buildAnalysts(),

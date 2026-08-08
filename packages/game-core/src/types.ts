@@ -136,7 +136,19 @@ export interface LotPolicyV1 {
   themeBoostFactor: number;
   countMin: number;
   countMax: number;
-  board: { width: number; height: number; maxAttempts: number };
+  board: {
+    width: number;
+    height: number;
+    maxAttempts: number;
+    /**
+     * Optional occupied-row span target for the layout (THE-35). When both are
+     * set, the layout spreads placements vertically so the number of occupied
+     * board rows trends toward [minOccupiedRows, maxOccupiedRows] instead of
+     * dense top-packing. When absent, the original dense top-packing applies.
+     */
+    minOccupiedRows?: number;
+    maxOccupiedRows?: number;
+  };
 }
 
 export interface PublicIntelPoolEntry {

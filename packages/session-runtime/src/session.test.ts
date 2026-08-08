@@ -344,9 +344,9 @@ describe("session runtime (in-memory, FakeClock)", () => {
     // Seed chosen because it produces a multi-round auction, which is what this
     // test is about. Bid amounts depend on the shared expected-value estimate
     // and the per-round budget-exposure cap, so a seed can flip to a
-    // single-round settlement when either changes. "mr-7" is picked with margin
-    // (5 bidding rounds, not the bare 2 this asserts) to survive small tuning.
-    const room = manager.createAllAi({ matchId: "multi-frames", seed: "mr-7", events });
+    // single-round settlement when either changes. "mr-13" is picked with margin
+    // (6 bidding rounds, not the bare 2 this asserts) to survive small tuning.
+    const room = manager.createAllAi({ matchId: "multi-frames", seed: "mr-13", events });
     await room.initializeDemoToAuctionReady();
     updates.length = 0;
     const kinds: string[] = [];
