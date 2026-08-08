@@ -142,6 +142,20 @@ input, select {
   align-items: center;
 }
 
+/* THE-29: small, low-visual-priority build version stamp */
+.app-version {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.home .app-version {
+  margin-top: 32px;
+}
+
+.table-toolbar .app-version {
+  margin-inline-start: auto;
+}
+
 button.link {
   background: none;
   border: none;

@@ -90,6 +90,7 @@ export function HomePage({
           <option value="en">English</option>
         </select>
       </div>
+      <p className="app-version" data-testid="app-version">v{__APP_VERSION__}</p>
     </main>
   );
 }

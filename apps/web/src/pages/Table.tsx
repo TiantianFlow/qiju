@@ -238,6 +238,7 @@ export function TablePage({
         <button type="button" data-testid="open-catalog" onClick={() => openCatalog()}>
           {t(strings, "catalog.open")}
         </button>
+        <span className="app-version" data-testid="app-version">v{__APP_VERSION__}</span>
       </div>
 
       {connection.lastRejection ? (
