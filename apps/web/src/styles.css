@@ -286,6 +286,55 @@ button.link {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
+.player-hud {
+  display: flex;
+  gap: 8px 24px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  padding: 4px 14px;
+  border: 1px solid #3a4d6c;
+  border-radius: 10px;
+  background: var(--panel);
+  flex: 0 0 auto;
+  font-size: 14px;
+  /* Positioning context for the analyst-description popover (see below). */
+  position: relative;
+}
+
+.player-hud-analyst,
+.player-hud-budget {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.player-hud-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.player-hud strong {
+  color: var(--accent);
+}
+
+/* THE-9: the shared .value-hud-hint popover is right-anchored (right: 0) for
+   the estimated-value HUD on the right side of the screen. The player HUD sits
+   at the left edge, so the same anchoring pushes the analyst-description
+   popover off the left side of the viewport — anchor it to the left here.
+   And because the popover's usual containing block is the hint element itself
+   (which sits partway across the HUD), a left anchor there would clip the
+   right edge on narrow viewports; so the hint opts out of being the
+   containing block and the popover anchors to the player HUD's own left
+   edge instead. */
+.player-hud .value-hud-hint {
+  position: static;
+}
+
+.player-hud .value-hud-hint p {
+  left: 0;
+  right: auto;
+}
+
 .table-toolbar {
   display: flex;
   gap: 10px;

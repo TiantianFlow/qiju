@@ -156,6 +156,69 @@ test.describe("human vs AI match", () => {
     await expect(page.locator(".current-bid strong")).toHaveText("500,000");
   });
 
+  test("player HUD persistently shows the chosen analyst and the budget (THE-9)", async ({ page }) => {
+    test.setTimeout(60_000);
+    await openSeededHuman(page, "player-hud-seed-1");
+    await page.getByTestId("analyst-analyst.appraiser").click();
+    await page.getByTestId("kit-kit.appraisal").click();
+    await page.getByTestId("lock-setup").click();
+
+    await expect(page.getByTestId("bid-input")).toBeVisible({ timeout: 20_000 });
+    const analystName = page.getByTestId("player-hud-analyst-name");
+    await expect(analystName).toHaveText("估价师");
+    // The analyst's description rides on the chip as a tooltip.
+    await expect(analystName).toHaveAttribute("title", /拍卖开始/);
+    await expect(page.getByTestId("player-hud-budget-value")).toHaveText("2,000,000");
+
+    // Tap path: the opened description popover must stay fully inside the
+    // viewport (the shared hint CSS right-anchors it, which clipped it off
+    // the left edge before the player-hud-scoped override).
+    const hint = page.locator(".player-hud .value-hud-hint");
+    await hint.locator("summary").click();
+    const popover = hint.locator("p");
+    await expect(popover).toBeVisible();
+    await expect(popover).toContainText("拍卖开始");
+    const box = await popover.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    const viewportWidth = page.viewportSize()!.width;
+    expect(box!.x + box!.width).toBeLessThanOrEqual(viewportWidth);
+  });
+
+  // Same both-edges-inside-viewport property as the desktop assertion above,
+  // but across width × locale: left-anchoring the popover to the hint icon
+  // clipped the right edge at 390px (worse in English, where the wider
+  // "Analyst Appraiser" label pushes the icon further right). One test per
+  // combination — a fresh context each, since an in-progress match survives
+  // page.goto("/") via the reconnect flow.
+  for (const width of [1280, 390]) {
+    for (const locale of ["zh-CN", "en"] as const) {
+      test(`analyst description popover stays inside the viewport at ${width}px (${locale}) (THE-9)`, async ({ page }) => {
+        test.setTimeout(60_000);
+        await page.setViewportSize({ width, height: 720 });
+        await page.goto("/");
+        await page.getByTestId("locale-select").selectOption(locale);
+        await page.locator(".seed-row button").click();
+        await page.getByTestId("seed-input").fill(`player-hud-pop-${locale}-${width}`);
+        await page.getByTestId("play-vs-ai").click();
+        await expect(page.getByTestId("lock-setup")).toBeVisible({ timeout: 15_000 });
+        await page.getByTestId("analyst-analyst.appraiser").click();
+        await page.getByTestId("kit-kit.appraisal").click();
+        await page.getByTestId("lock-setup").click();
+        await expect(page.getByTestId("bid-input")).toBeVisible({ timeout: 20_000 });
+
+        const hint = page.locator(".player-hud .value-hud-hint");
+        await hint.locator("summary").click();
+        const popover = hint.locator("p");
+        await expect(popover).toBeVisible();
+        const box = await popover.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.x).toBeGreaterThanOrEqual(0);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+      });
+    }
+  }
+
   test("deadline survives reload and the server closes the window at 120s", async ({ page }) => {
     test.setTimeout(200_000);
     await openSeededHuman(page, "timer-seed-2");
@@ -195,6 +258,10 @@ test.describe("all-AI demo", () => {
     const mainHtml = await page.locator("main").innerHTML();
     expect(mainHtml).not.toMatch(/\brev\b/i);
     await expect(page.getByTestId("deadline")).toHaveCount(0);
+    // Spectator view: the budget reminder is shown, but there is no single
+    // "current player", so no analyst chip (THE-9 scoping call).
+    await expect(page.getByTestId("player-hud-budget-value")).toHaveText("2,000,000");
+    await expect(page.getByTestId("player-hud-analyst-name")).toHaveCount(0);
     const before = await presentationText();
     expect(before).toContain("准备完成");
     await page.getByTestId("demo-step").click();

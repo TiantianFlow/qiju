@@ -224,6 +224,29 @@ export function TablePage({
         remainingSeconds={remaining}
       />
 
+      {/* THE-9: persistent reminder of the player's analyst (description on
+          hover/tap) and the match budget, so neither has to be recalled from
+          the Setup screen. Observer/spectator views have no mySeat, so the
+          analyst chip only renders for an actual seated player. */}
+      <section className="player-hud" data-testid="player-hud" aria-label={t(strings, "hud.budget")}>
+        {my?.analystId ? (
+          <span className="player-hud-analyst">
+            <span className="player-hud-label">{t(strings, "hud.analyst")}</span>
+            <strong data-testid="player-hud-analyst-name" title={t(strings, `${my.analystId}.desc`)}>
+              {t(strings, `${my.analystId}.name`)}
+            </strong>
+            <details className="value-hud-hint">
+              <summary aria-label={t(strings, `${my.analystId}.desc`)}>?</summary>
+              <p>{t(strings, `${my.analystId}.desc`)}</p>
+            </details>
+          </span>
+        ) : null}
+        <span className="player-hud-budget">
+          <span className="player-hud-label">{t(strings, "hud.budget")}</span>
+          <strong data-testid="player-hud-budget-value">{formatNumber(view.startingBudget, locale)}</strong>
+        </span>
+      </section>
+
       <div className="table-toolbar">
         {isObserver && connection.demo.presentation ? (
           <span className="presentation" data-testid="presentation">
