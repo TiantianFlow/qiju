@@ -1,73 +1,133 @@
 import { describe, expect, it } from "vitest";
-import type { MatchResult, SeatId, TrainingUtilityEntry } from "@qiju/game-core";
+import type {
+  EconomicResultEntry,
+  MatchResult,
+  SeatId,
+  TrainingUtilityEntry,
+} from "@qiju/game-core";
 import {
   ESTABLISHED_K,
   INITIAL_RATING,
   PROVISIONAL_K,
-  PROVISIONAL_MATCH_COUNT,
   TYCOON_THRESHOLDS,
-  applyMatchResult,
-  applyUtilities,
-  applyUtility,
-  initialRatingState,
-  nextRating,
-  ratingK,
+  cumulativeRealizedProfit,
   tycoonTier,
-  utilityOf,
+  updateAppraiserRating,
 } from "./index.js";
+
+// ---------------------------------------------------------------------------
+// MatchResult builders — every rating path below goes through real
+// engine-shaped MatchResult data, never raw utility number arrays.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_DENOMINATOR = 400_000; // 4 * startingBudget, e.g. budget 100,000.
+
+function trainingEntry(
+  seatId: SeatId,
+  utilityNumerator: number,
+  utilityDenominator: number = DEFAULT_DENOMINATOR,
+): TrainingUtilityEntry {
+  return { seatId, utilityNumerator, utilityDenominator };
+}
+
+function economicEntry(
+  seatId: SeatId,
+  realizedProfit: number,
+): EconomicResultEntry {
+  return {
+    seatId,
+    finalWealth: 0,
+    realizedProfit,
+    bonusReward: 0,
+    denseEconomicRank: 1,
+  };
+}
+
+function matchResult(
+  training: readonly TrainingUtilityEntry[],
+  economic: readonly EconomicResultEntry[] = [],
+): MatchResult {
+  return { acquisition: {}, economic: [...economic], training: [...training] };
+}
+
+/** A completed match in which `seatId` produced exactly `utility`. */
+function matchWithUtility(seatId: SeatId, utility: number): MatchResult {
+  return matchResult([
+    trainingEntry(seatId, utility * DEFAULT_DENOMINATOR),
+  ]);
+}
+
+/** A completed match in which `seatId` realized exactly `profit`. */
+function matchWithProfit(seatId: SeatId, profit: number): MatchResult {
+  return matchResult(
+    [trainingEntry(seatId, 0)],
+    [economicEntry(seatId, profit)],
+  );
+}
+
+/** Fold updateAppraiserRating over real MatchResult fixtures. */
+function applyMatchResults(
+  results: readonly MatchResult[],
+  seatId: SeatId,
+  startRating: number,
+  startCompleted: number,
+): number {
+  let rating = startRating;
+  let completed = startCompleted;
+  for (const result of results) {
+    rating = updateAppraiserRating(rating, completed, result, seatId);
+    completed += 1;
+  }
+  return rating;
+}
+
+const SEAT: SeatId = "seat1";
+const OTHER_SEAT: SeatId = "seat2";
 
 // ---------------------------------------------------------------------------
 // Appraiser Rating — deterministic utility updates (gate 1)
 // ---------------------------------------------------------------------------
 
 describe("Appraiser Rating utility updates", () => {
-  it("starts at 1000 with zero completed matches", () => {
-    expect(initialRatingState()).toEqual({
-      rating: INITIAL_RATING,
-      completedMatches: 0,
-    });
+  it("starts from the initial rating constant of 1000", () => {
     expect(INITIAL_RATING).toBe(1000);
   });
 
   it("positive utility raises the rating by K * utility", () => {
-    // First match: provisional K = 32.
-    expect(nextRating(1000, 0, 0.25)).toBe(1000 + 32 * 0.25);
-    expect(nextRating(1000, 0, 0.25)).toBe(1008);
+    // First match: provisional K = 32, utility +0.25.
+    expect(
+      updateAppraiserRating(1000, 0, matchWithUtility(SEAT, 0.25), SEAT),
+    ).toBe(1000 + 32 * 0.25);
   });
 
-  it("zero utility leaves the rating unchanged", () => {
-    expect(nextRating(1000, 0, 0)).toBe(1000);
-    expect(nextRating(1234.5, 25, 0)).toBe(1234.5);
+  it("zero utility (break-even match) leaves the rating unchanged", () => {
+    expect(
+      updateAppraiserRating(1000, 0, matchWithUtility(SEAT, 0), SEAT),
+    ).toBe(1000);
+    expect(
+      updateAppraiserRating(1234.5, 25, matchWithUtility(SEAT, 0), SEAT),
+    ).toBe(1234.5);
   });
 
-  it("negative utility lowers the rating by K * |utility|", () => {
-    expect(nextRating(1000, 0, -0.5)).toBe(1000 - 16);
-    // Established K applies below as well.
-    expect(nextRating(1200, 20, -0.25)).toBe(1200 - 4);
+  it("negative utility (a losing match) lowers the rating by K * |utility|", () => {
+    expect(
+      updateAppraiserRating(1000, 0, matchWithUtility(SEAT, -0.5), SEAT),
+    ).toBe(1000 - 16);
+    expect(
+      updateAppraiserRating(1200, 20, matchWithUtility(SEAT, -0.25), SEAT),
+    ).toBe(1200 - 4);
   });
 
   it("preserves full numeric precision (no rounding, no clamping)", () => {
-    const result = nextRating(1000, 0, 1 / 3);
-    expect(result).toBe(1000 + 32 / 3);
-    expect(result).not.toBe(Math.round(result));
-  });
-
-  it("utilityOf divides the game-core numerator by the denominator", () => {
-    const entry: TrainingUtilityEntry = {
-      seatId: "seat1",
-      utilityNumerator: 400_000,
-      utilityDenominator: 2_000_000,
-    };
-    expect(utilityOf(entry)).toBe(0.2);
-  });
-
-  it("utilityOf treats a zero denominator as zero utility", () => {
-    const entry: TrainingUtilityEntry = {
-      seatId: "seat1",
-      utilityNumerator: 1,
-      utilityDenominator: 0,
-    };
-    expect(utilityOf(entry)).toBe(0);
+    const utility = 1 / 3;
+    const rating = updateAppraiserRating(
+      1000,
+      0,
+      matchWithUtility(SEAT, utility),
+      SEAT,
+    );
+    expect(rating).toBe(1000 + 32 * utility);
+    expect(rating).not.toBe(Math.round(rating));
   });
 });
 
@@ -76,29 +136,27 @@ describe("Appraiser Rating utility updates", () => {
 // ---------------------------------------------------------------------------
 
 describe("provisional/established K boundary", () => {
-  it("uses provisional K=32 for pre-update counts 0..19 (matches 1..20)", () => {
-    expect(ratingK(0)).toBe(PROVISIONAL_K);
-    expect(ratingK(19)).toBe(PROVISIONAL_K);
+  it("match 20 (pre-update count 19) still uses the provisional rule K=32", () => {
     expect(PROVISIONAL_K).toBe(32);
-  });
-
-  it("match 20 (pre-update count 19) still uses the provisional rule", () => {
-    // The 20th completed match: 19 matches already recorded before update.
-    expect(nextRating(1000, 19, 0.25)).toBe(1000 + 32 * 0.25);
+    expect(
+      updateAppraiserRating(1000, 19, matchWithUtility(SEAT, 0.25), SEAT),
+    ).toBe(1000 + 32 * 0.25);
   });
 
   it("match 21 (pre-update count 20) uses the established rule K=16", () => {
-    expect(ratingK(20)).toBe(ESTABLISHED_K);
     expect(ESTABLISHED_K).toBe(16);
-    expect(nextRating(1000, 20, 0.25)).toBe(1000 + 16 * 0.25);
+    expect(
+      updateAppraiserRating(1000, 20, matchWithUtility(SEAT, 0.25), SEAT),
+    ).toBe(1000 + 16 * 0.25);
   });
 
-  it("applyUtilities switches K exactly after the 20th match", () => {
-    const utilities = Array<number>(21).fill(0.5);
-    const state = applyUtilities(utilities);
+  it("a 21-match window switches K exactly after the 20th match", () => {
+    const results = Array.from({ length: 21 }, () =>
+      matchWithUtility(SEAT, 0.5),
+    );
+    const rating = applyMatchResults(results, SEAT, 1000, 0);
     // 20 provisional steps of 32 * 0.5, then 1 established step of 16 * 0.5.
-    expect(state.completedMatches).toBe(21);
-    expect(state.rating).toBe(1000 + 20 * 16 + 1 * 8);
+    expect(rating).toBe(1000 + 20 * 16 + 1 * 8);
   });
 });
 
@@ -116,94 +174,247 @@ describe("provisional/established K boundary", () => {
 // player. The Appraiser Rating is margin-proportional and blind to win
 // count, so the single wide win must finish higher than twenty thin wins
 // inside an equal 20-match window from the same starting rating/status.
+//
+// Every match below is a real MatchResult carrying the game-core
+// numerator/denominator pair; no raw-utility number helper is exported.
 // ---------------------------------------------------------------------------
 
-const THIN_FARM_20_WINS = Array<number>(20).fill(0.01);
-const WIDE_RESULT_1_WIN = [0.25, ...Array<number>(19).fill(0)];
+function thinFarmWindow(seatId: SeatId): MatchResult[] {
+  // The thin-farm player WON ALL 20 matches by a hair.
+  return Array.from({ length: 20 }, () => matchWithUtility(seatId, 0.01));
+}
+
+function wideResultWindow(seatId: SeatId): MatchResult[] {
+  // The wide-result player WON EXACTLY 1 match decisively, neutral in 19.
+  return [
+    matchWithUtility(seatId, 0.25),
+    ...Array.from({ length: 19 }, () => matchWithUtility(seatId, 0)),
+  ];
+}
 
 describe("bot-farm fixture: margin-proportional rating is blind to win count", () => {
   it("provisional window: 20 thin wins (+0.01 x20) finish below 1 wide win (+0.25) plus 19 neutral matches", () => {
-    // thin-farm player: won all 20 matches by a hair.
-    const thin = applyUtilities(THIN_FARM_20_WINS);
-    // wide-result player: won only 1 match, neutral in 19.
-    const wide = applyUtilities(WIDE_RESULT_1_WIN);
-    expect(thin.completedMatches).toBe(20);
-    expect(wide.completedMatches).toBe(20);
-    expect(wide.rating).toBeGreaterThan(thin.rating);
+    const thin = applyMatchResults(thinFarmWindow(SEAT), SEAT, 1000, 0);
+    const wide = applyMatchResults(wideResultWindow(SEAT), SEAT, 1000, 0);
+    expect(wide).toBeGreaterThan(thin);
     // Exact unrounded values in the accumulation order the function uses:
     // 20 sequential provisional steps of 32 * 0.01 vs one step of 32 * 0.25.
-    expect(thin.rating).toBe(
-      THIN_FARM_20_WINS.reduce((r, u) => r + PROVISIONAL_K * u, INITIAL_RATING),
+    expect(thin).toBe(
+      Array<number>(20)
+        .fill(0.01)
+        .reduce((r, u) => r + PROVISIONAL_K * u, INITIAL_RATING),
     );
-    expect(wide.rating).toBe(1000 + 32 * 0.25);
+    expect(wide).toBe(1000 + 32 * 0.25);
   });
 
   it("established window: 20 thin wins finish below 1 wide win plus 19 neutral matches under K=16", () => {
     // Same 20-match window, both players already established
     // (20 completed matches before the window starts).
-    const established = {
-      rating: INITIAL_RATING,
-      completedMatches: PROVISIONAL_MATCH_COUNT,
-    };
-    const thin = applyUtilities(THIN_FARM_20_WINS, established);
-    const wide = applyUtilities(WIDE_RESULT_1_WIN, established);
-    expect(thin.completedMatches).toBe(40);
-    expect(wide.completedMatches).toBe(40);
-    expect(wide.rating).toBeGreaterThan(thin.rating);
+    const thin = applyMatchResults(thinFarmWindow(SEAT), SEAT, 1000, 20);
+    const wide = applyMatchResults(wideResultWindow(SEAT), SEAT, 1000, 20);
+    expect(wide).toBeGreaterThan(thin);
     // Exact unrounded values: 20 sequential established steps of 16 * 0.01
     // vs one step of 16 * 0.25.
-    expect(thin.rating).toBe(
-      THIN_FARM_20_WINS.reduce((r, u) => r + ESTABLISHED_K * u, INITIAL_RATING),
+    expect(thin).toBe(
+      Array<number>(20)
+        .fill(0.01)
+        .reduce((r, u) => r + ESTABLISHED_K * u, INITIAL_RATING),
     );
-    expect(wide.rating).toBe(1000 + 16 * 0.25);
+    expect(wide).toBe(1000 + 16 * 0.25);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Human vs AI — no participant-type code path (gate 5)
+// Boundary validation: rating inputs (gates 3/6)
 // ---------------------------------------------------------------------------
 
-describe("human and AI seats share one code path", () => {
-  function completedResult(training: TrainingUtilityEntry[]): MatchResult {
-    return { acquisition: {}, economic: [], training };
-  }
+describe("rating input validation", () => {
+  const good = matchWithUtility(SEAT, 0.25);
 
-  it("identical results for human-vs-AI and human-vs-human inputs", () => {
-    // The module receives a MatchResult and a SeatId; nothing carries a
-    // participant type, so the same numbers must produce the same update.
-    const humanSeat: SeatId = "seat1";
-    const aiSeat: SeatId = "seat2";
-    const entry = (seatId: SeatId): TrainingUtilityEntry => ({
-      seatId,
-      utilityNumerator: 100_000,
-      utilityDenominator: 400_000,
-    });
-
-    const humanVsAi = completedResult([entry(humanSeat), entry(aiSeat)]);
-    const humanVsHuman = completedResult([entry(humanSeat), entry(aiSeat)]);
-
-    const start = initialRatingState();
-    expect(applyMatchResult(start, humanVsAi, humanSeat)).toEqual(
-      applyMatchResult(start, humanVsHuman, humanSeat),
-    );
-    expect(applyMatchResult(start, humanVsAi, aiSeat)).toEqual(
-      applyMatchResult(start, humanVsHuman, aiSeat),
-    );
-    // utility 0.25 with provisional K: 1000 + 32 * 0.25.
-    expect(applyMatchResult(start, humanVsAi, humanSeat).rating).toBe(1008);
+  it("rejects non-finite currentRating", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(() => updateAppraiserRating(bad, 0, good, SEAT)).toThrow(
+        /currentRating/,
+      );
+    }
   });
 
-  it("throws when the seat has no training entry in the match result", () => {
-    const result = completedResult([]);
+  it("rejects non-finite, negative, and fractional completed-match counts", () => {
+    for (const bad of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY]) {
+      expect(() => updateAppraiserRating(1000, bad, good, SEAT)).toThrow(
+        /completedMatchesBeforeUpdate/,
+      );
+    }
+  });
+
+  it("rejects a missing training entry for the seat", () => {
+    const result = matchResult([trainingEntry(OTHER_SEAT, 100)]);
+    expect(() => updateAppraiserRating(1000, 0, result, SEAT)).toThrow(
+      /no training utility entry/,
+    );
+  });
+
+  it("rejects duplicate training entries for the seat", () => {
+    const result = matchResult([
+      trainingEntry(SEAT, 100),
+      trainingEntry(SEAT, 200),
+    ]);
+    expect(() => updateAppraiserRating(1000, 0, result, SEAT)).toThrow(
+      /duplicate training utility entries/,
+    );
+  });
+
+  it("rejects non-finite numerator and denominator", () => {
     expect(() =>
-      applyMatchResult(initialRatingState(), result, "seat4"),
-    ).toThrow(/no training utility entry/);
+      updateAppraiserRating(
+        1000,
+        0,
+        matchResult([trainingEntry(SEAT, Number.NaN)]),
+        SEAT,
+      ),
+    ).toThrow(/utilityNumerator/);
+    expect(() =>
+      updateAppraiserRating(
+        1000,
+        0,
+        matchResult([trainingEntry(SEAT, 100, Number.POSITIVE_INFINITY)]),
+        SEAT,
+      ),
+    ).toThrow(/utilityDenominator/);
   });
 
-  it("applyUtility increments the completed-match count", () => {
-    const state = applyUtility(initialRatingState(), -0.1);
-    expect(state.completedMatches).toBe(1);
-    expect(state.rating).toBe(1000 + 32 * -0.1);
+  it("rejects zero or negative denominators instead of converting to neutral", () => {
+    for (const bad of [0, -400_000]) {
+      expect(() =>
+        updateAppraiserRating(
+          1000,
+          0,
+          matchResult([trainingEntry(SEAT, 100, bad)]),
+          SEAT,
+        ),
+      ).toThrow(/utilityDenominator.*positive/);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cumulative realized profit (gate 6)
+// ---------------------------------------------------------------------------
+
+describe("cumulativeRealizedProfit", () => {
+  it("sums realized profit across matches for the selected seat only", () => {
+    const results = [
+      matchResult(
+        [trainingEntry(SEAT, 0), trainingEntry(OTHER_SEAT, 0)],
+        [economicEntry(SEAT, 500_000), economicEntry(OTHER_SEAT, 9_999_999)],
+      ),
+      matchResult(
+        [trainingEntry(SEAT, 0), trainingEntry(OTHER_SEAT, 0)],
+        [economicEntry(SEAT, 750_000), economicEntry(OTHER_SEAT, 1)],
+      ),
+    ];
+    expect(cumulativeRealizedProfit(results, SEAT)).toBe(1_250_000);
+    // The other seat's profits are never added in.
+    expect(cumulativeRealizedProfit(results, OTHER_SEAT)).toBe(10_000_000);
+  });
+
+  it("empty history and zero-profit no-sale matches count as zero", () => {
+    expect(cumulativeRealizedProfit([], SEAT)).toBe(0);
+    const noSale = matchWithProfit(SEAT, 0);
+    expect(cumulativeRealizedProfit([noSale, noSale], SEAT)).toBe(0);
+  });
+
+  it("accumulates net losses as negative profit", () => {
+    const results = [
+      matchWithProfit(SEAT, 600_000),
+      matchWithProfit(SEAT, -250_000),
+      matchWithProfit(SEAT, -500_000),
+    ];
+    expect(cumulativeRealizedProfit(results, SEAT)).toBe(-150_000);
+    expect(tycoonTier(cumulativeRealizedProfit(results, SEAT))).toBe(
+      "Novice Bidder",
+    );
+  });
+
+  it("rejects a missing economic entry for the seat", () => {
+    const result = matchResult(
+      [trainingEntry(SEAT, 0)],
+      [economicEntry(OTHER_SEAT, 1_000)],
+    );
+    expect(() => cumulativeRealizedProfit([result], SEAT)).toThrow(
+      /no economic entry/,
+    );
+  });
+
+  it("rejects duplicate economic entries for the seat", () => {
+    const result = matchResult(
+      [trainingEntry(SEAT, 0)],
+      [economicEntry(SEAT, 1_000), economicEntry(SEAT, 2_000)],
+    );
+    expect(() => cumulativeRealizedProfit([result], SEAT)).toThrow(
+      /duplicate economic entries/,
+    );
+  });
+
+  it("rejects non-finite realized profit", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(() =>
+        cumulativeRealizedProfit([matchWithProfit(SEAT, bad)], SEAT),
+      ).toThrow(/realizedProfit/);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Non-mutation of inputs (gate 6)
+// ---------------------------------------------------------------------------
+
+describe("input non-mutation", () => {
+  it("updateAppraiserRating does not mutate the MatchResult", () => {
+    const result = matchWithUtility(SEAT, 0.25);
+    const snapshot = structuredClone(result);
+    updateAppraiserRating(1000, 0, result, SEAT);
+    expect(result).toEqual(snapshot);
+  });
+
+  it("cumulativeRealizedProfit does not mutate the array or its results", () => {
+    const results = [
+      matchWithProfit(SEAT, 500_000),
+      matchWithProfit(SEAT, -100_000),
+    ];
+    const snapshot = structuredClone(results);
+    cumulativeRealizedProfit(results, SEAT);
+    expect(results).toEqual(snapshot);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Structural mode-independence (gate 5)
+//
+// MatchResult has no participant/controller/mode field and the exported API
+// accepts only economic match data plus a SeatId. Identical economic data for
+// two seats therefore produces identical updates, whichever side of the table
+// is human or AI — there is no participant-type code path to branch on.
+// ---------------------------------------------------------------------------
+
+describe("structural mode-independence: identical economics, identical rating", () => {
+  it("two seats with identical training entries get identical updates", () => {
+    const result = matchResult([
+      trainingEntry("seat1", 100_000),
+      trainingEntry("seat2", 100_000),
+      trainingEntry("seat3", -50_000),
+      trainingEntry("seat4", 0),
+    ]);
+    expect(updateAppraiserRating(1000, 0, result, "seat1")).toBe(
+      updateAppraiserRating(1000, 0, result, "seat2"),
+    );
+    expect(updateAppraiserRating(1000, 0, result, "seat1")).toBe(
+      1000 + 32 * (100_000 / DEFAULT_DENOMINATOR),
+    );
+    expect(updateAppraiserRating(1000, 0, result, "seat4")).toBe(1000);
+    expect(updateAppraiserRating(1000, 0, result, "seat3")).toBe(
+      1000 + 32 * (-50_000 / DEFAULT_DENOMINATOR),
+    );
   });
 });
 
@@ -236,5 +447,21 @@ describe("Tycoon Ladder tier mapping", () => {
     expect(tycoonTier(grandAuctioneer - 1)).toBe("Master Dealer");
     expect(tycoonTier(grandAuctioneer)).toBe("Grand Auctioneer");
     expect(tycoonTier(grandAuctioneer + 1)).toBe("Grand Auctioneer");
+  });
+
+  it("rejects non-finite cumulative profit", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(() => tycoonTier(bad)).toThrow(/cumulativeRealizedNetProfit/);
+    }
+  });
+
+  it("maps engine-summed profit to a tier", () => {
+    const results = [
+      matchWithProfit(SEAT, 4_000_000),
+      matchWithProfit(SEAT, 1_500_000),
+    ];
+    expect(tycoonTier(cumulativeRealizedProfit(results, SEAT))).toBe(
+      "Master Dealer",
+    );
   });
 });
