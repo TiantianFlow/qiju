@@ -39,6 +39,13 @@ import {
   verifyTokens,
   type SessionEnv,
 } from "./session.js";
+import {
+  buildPersistedMatch,
+  persistenceDeps,
+  persistMatchCompletionFailOpen,
+  type MatchPersistenceStore,
+} from "./persistence.js";
+import type { MatchResult } from "@qiju/game-core";
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -122,6 +129,13 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     throw new Error("COOKIE_SECRET is required in production");
   }
   const cookieSecret = env.COOKIE_SECRET ?? "dev-only-insecure-secret-change-me";
+  // THE-37b: resolve the persistence store at BUILD time, per app instance
+  // (same discipline as sessionDeps.verifyClientFactory): a fault-injected
+  // store must not leak between app instances in one process.
+  const resolvedMatchStore: MatchPersistenceStore = persistenceDeps.storeFactory({
+    SUPABASE_URL: String(merged.SUPABASE_URL),
+    SUPABASE_SECRET_KEY: String(merged.SUPABASE_SECRET_KEY),
+  });
 
   const runtime = compileDemoV2();
   const clock = new SystemClock();
@@ -255,6 +269,11 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     SUPABASE_SECRET_KEY: env.SUPABASE_SECRET_KEY,
   };
   const verifyClient = createVerifyClient(sessionEnv);
+
+  // THE-37b: match persistence store, resolved at build time (above) so a
+  // fault-injected factory affects exactly one app instance. The default is
+  // the real secret-key Supabase store; never the publishable key — RLS
+  // denies it.
   const cookieOpts = {
     production: env.NODE_ENV === "production",
     ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
@@ -347,8 +366,28 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
       modes: ["human-vs-ai", "all-ai"],
       productName: BRAND.productName,
       allowFixedSeed: env.ALLOW_FIXED_SEED,
-      persistence: "in-memory",
+      persistence: "durable",
     };
+  });
+
+  /**
+   * THE-37b: the caller's own career aggregates, computed in SQL over
+   * persisted rows. Self-only (no :userId — no enumeration surface),
+   * NEVER mints (the 30/hour anonymous-signup cap is real), and a
+   * principal with no history gets zeroed aggregates, not 404.
+   */
+  app.get("/api/v1/me/career", async (request, reply) => {
+    const principal = await resolveExistingPrincipal(request, reply);
+    if (principal.kind === "transient") return transientUnavailable(reply);
+    if (principal.principalId === null) {
+      return reply.code(401).send({ error: "AUTH_REQUIRED" });
+    }
+    try {
+      return await resolvedMatchStore.careerForUser(principal.principalId);
+    } catch (err) {
+      request.log.error({ err: err instanceof Error ? err.message : String(err) }, "career query failed");
+      return reply.code(503).send({ error: "TEMPORARY_STORAGE_FAILURE" });
+    }
   });
 
   app.get("/api/v1/content/:bundle/:locale", async (request, reply) => {
@@ -385,11 +424,36 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
       manager.delete(matchId);
     }
 
+    // THE-37b: resolve identity BEFORE defining the completion handler so
+    // the handler can capture seat metadata without touching session-runtime
+    // internals. human-vs-ai: seat1 is the human seat (RoomManager
+    // construction), attributed to the resolved principal; all-ai: every
+    // seat is an agent with a null user reference.
+    let humanPrincipalId: string | null = null;
+    if (parsed.data.mode === "human-vs-ai") {
+      // THE-37a: the only path that mints a durable identity. all-ai matches
+      // and read endpoints never consume the anonymous-signup bucket.
+      const principal = await requirePrincipal(request, reply);
+      if (principal.kind === "transient") return transientUnavailable(reply);
+      humanPrincipalId = principal.principalId;
+    }
+    const seatContext: {
+      mode: "human-vs-ai" | "all-ai";
+      seats: Array<{ seatId: string; kind: "human" | "agent"; principalId?: string }>;
+    } = {
+      mode: parsed.data.mode,
+      seats: ["seat1", "seat2", "seat3", "seat4"].map((seatId) =>
+        seatId === "seat1" && parsed.data.mode === "human-vs-ai"
+          ? { seatId, kind: "human" as const, principalId: humanPrincipalId! }
+          : { seatId, kind: "agent" as const },
+      ),
+    };
+
     const roomEvents: RoomEvents = {
       onViewUpdate(update: ViewUpdate, revision: number) {
         pushView(matchId, update, revision);
       },
-      onMatchCompleted(result: unknown) {
+      onMatchCompleted(result: unknown, finalStateHash: string) {
         pushToMatch(matchId, (ctx, seq) => ({
           protocolVersion: PROTOCOL_VERSION,
           serverSequence: seq,
@@ -398,16 +462,33 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
           type: "match_completed",
           payload: result,
         }));
+        // THE-37b: durable record. Fire-and-forget AFTER the push is queued;
+        // the store call is fail-open (logged + swallowed) so a database
+        // problem can never block, delay, or fail the completion. Seat
+        // metadata comes from the creation context (seat1 is the human seat
+        // in human-vs-ai by RoomManager construction); agent seats carry a
+        // null user reference, which is what keeps all-ai economics out of
+        // every career aggregate in SQL.
+        const persisted = buildPersistedMatch({
+          matchId,
+          mode: seatContext.mode,
+          seed,
+          ruleBundleId: runtime.manifest.ruleBundleId,
+          ruleManifestHash: runtime.manifestHash,
+          contentHash: runtime.contentHash,
+          finalStateHash,
+          result: result as MatchResult,
+          seats: seatContext.seats,
+        });
+        persistMatchCompletionFailOpen(resolvedMatchStore, persisted, (message) =>
+          app.log.error({ matchId, err: message }, "match persistence failed (fail-open)"),
+        );
       },
       onEvents() {},
     };
 
     if (parsed.data.mode === "human-vs-ai") {
-      // THE-37a: the only path that mints a durable identity. all-ai matches
-      // and read endpoints never consume the anonymous-signup bucket.
-      const principal = await requirePrincipal(request, reply);
-      if (principal.kind === "transient") return transientUnavailable(reply);
-      manager.createHumanVsAi({ matchId, seed, humanPrincipalId: principal.principalId, events: roomEvents });
+      manager.createHumanVsAi({ matchId, seed, humanPrincipalId: humanPrincipalId!, events: roomEvents });
     } else {
       manager.createAllAi({ matchId, seed, events: roomEvents });
     }

@@ -80,7 +80,7 @@ export interface CapabilitiesResponse {
   modes: string[];
   productName: { "zh-CN": string; en: string };
   allowFixedSeed: boolean;
-  persistence: "in-memory";
+  persistence: "in-memory" | "durable";
 }
 
 /** Player/observer match view fields (wire snapshot). Round-4 adds estimatedValue. */
