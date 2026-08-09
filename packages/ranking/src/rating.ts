@@ -53,11 +53,11 @@ function requireFinite(value: number, what: string): number {
 function requireCompletedCount(completedMatchesBeforeUpdate: number): number {
   requireFinite(completedMatchesBeforeUpdate, "completedMatchesBeforeUpdate");
   if (
-    !Number.isInteger(completedMatchesBeforeUpdate) ||
+    !Number.isSafeInteger(completedMatchesBeforeUpdate) ||
     completedMatchesBeforeUpdate < 0
   ) {
     throw new Error(
-      `completedMatchesBeforeUpdate must be a non-negative integer, got ${String(
+      `completedMatchesBeforeUpdate must be a non-negative safe integer, got ${String(
         completedMatchesBeforeUpdate,
       )}`,
     );
@@ -117,7 +117,10 @@ function validatedUtility(result: MatchResult, seatId: SeatId): number {
       )}`,
     );
   }
-  return numerator / denominator;
+  return requireFinite(
+    numerator / denominator,
+    `computed utility for seat ${seatId}`,
+  );
 }
 
 /**
@@ -136,7 +139,10 @@ function nextRating(
     completedMatchesBeforeUpdate >= PROVISIONAL_MATCH_COUNT
       ? ESTABLISHED_K
       : PROVISIONAL_K;
-  return currentRating + k * utility;
+  return requireFinite(
+    currentRating + k * utility,
+    "computed updated rating",
+  );
 }
 
 /**
@@ -176,6 +182,7 @@ export function cumulativeRealizedProfit(
       entry.realizedProfit,
       `realizedProfit for seat ${seatId}`,
     );
+    requireFinite(total, `cumulative realized profit for seat ${seatId}`);
   }
   return total;
 }

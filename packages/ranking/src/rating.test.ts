@@ -295,6 +295,36 @@ describe("rating input validation", () => {
       ).toThrow(/utilityDenominator.*positive/);
     }
   });
+
+  it("rejects a completed count beyond the safe-integer range", () => {
+    expect(() =>
+      updateAppraiserRating(
+        1000,
+        Number.MAX_SAFE_INTEGER + 1,
+        matchWithUtility(SEAT, 0.25),
+        SEAT,
+      ),
+    ).toThrow(/completedMatchesBeforeUpdate.*safe integer/);
+  });
+
+  it("rejects utility overflow from finite numerator and denominator", () => {
+    const result = matchResult([
+      trainingEntry(SEAT, Number.MAX_VALUE, Number.MIN_VALUE),
+    ]);
+    expect(() => updateAppraiserRating(1000, 0, result, SEAT)).toThrow(
+      /computed utility/,
+    );
+  });
+
+  it("rejects updated-rating overflow from finite operands", () => {
+    const result = matchResult([trainingEntry(SEAT, Number.MAX_VALUE, 1)]);
+    expect(() => updateAppraiserRating(1000, 0, result, SEAT)).toThrow(
+      /computed updated rating/,
+    );
+    expect(() => updateAppraiserRating(1000, 20, result, SEAT)).toThrow(
+      /computed updated rating/,
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -362,6 +392,16 @@ describe("cumulativeRealizedProfit", () => {
         cumulativeRealizedProfit([matchWithProfit(SEAT, bad)], SEAT),
       ).toThrow(/realizedProfit/);
     }
+  });
+
+  it("rejects cumulative overflow from finite realized profits", () => {
+    const results = [
+      matchWithProfit(SEAT, Number.MAX_VALUE),
+      matchWithProfit(SEAT, Number.MAX_VALUE),
+    ];
+    expect(() => cumulativeRealizedProfit(results, SEAT)).toThrow(
+      /cumulative realized profit/,
+    );
   });
 });
 
