@@ -64,3 +64,16 @@ alter table public.match_seats enable row level security;
 -- read nor write these tables (RLS + missing privileges, deny-by-default).
 grant select, insert on public.matches to service_role;
 grant select, insert on public.match_seats to service_role;
+
+-- Defence in depth: RLS is the runtime control, but Supabase's default
+-- privileges grant table privileges on new public tables to anon and
+-- authenticated (default ACLs owned by supabase_admin and postgres both
+-- grant ALL to those roles). Those grants are a live hazard behind a
+-- single control: if RLS were ever disabled — a debugging session, a
+-- future migration — the publishable key (public by design; it ships in
+-- the client) would immediately gain WRITE access to match records.
+-- Revoke everything from both roles so the grants are not merely unused
+-- but absent. service_role keeps select+insert above; nothing in the
+-- client touches these tables.
+revoke all on public.matches from anon, authenticated;
+revoke all on public.match_seats from anon, authenticated;
