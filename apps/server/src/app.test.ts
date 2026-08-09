@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
+import { appEnv, cookiePair } from "./test-helpers.js";
 import type { FastifyInstance } from "fastify";
 
 let app: FastifyInstance;
 
 beforeAll(async () => {
-  app = await buildApp({ LOG_LEVEL: "silent" });
+  app = await buildApp(appEnv());
   await app.ready();
 });
 
@@ -26,14 +27,14 @@ describe("server integration", () => {
     expect(body.defaultLocale).toBe("zh-CN");
   });
 
-  it("creates a human-vs-ai match and issues a guest cookie", async () => {
+  it("creates a human-vs-ai match and issues a session cookie", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/demo-matches",
       payload: { mode: "human-vs-ai", seed: "itest" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.headers["set-cookie"]).toBeDefined();
+    expect(cookiePair(res.headers["set-cookie"], "lv_session")).toBeTruthy();
     const body = res.json() as { matchId: string };
     expect(body.matchId).toBeTruthy();
   });

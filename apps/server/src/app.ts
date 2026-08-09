@@ -29,13 +29,37 @@ import {
   type RoomEvents,
   type ViewUpdate,
 } from "@qiju/session-runtime";
+import {
+  clearLegacyGuestCookie,
+  createVerifyClient,
+  decodeSessionCookie,
+  getClientIp,
+  mintAnonymousSession,
+  setSessionCookie,
+  verifyTokens,
+  type SessionEnv,
+} from "./session.js";
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   HOST: z.string().default("0.0.0.0"),
-  DATA_DIR: z.string().default("data"),
   COOKIE_SECRET: z.string().min(16).optional(),
   LOG_LEVEL: z.string().default("info"),
+  // THE-37a: Supabase is the identity store. The secret key is server-only —
+  // it must never reach the browser, a client bundle, a log line, or a
+  // committed file.
+  SUPABASE_URL: z.string().url(),
+  SUPABASE_PUBLISHABLE_KEY: z.string().min(1),
+  SUPABASE_SECRET_KEY: z.string().min(1),
+  // THE-37a: trust boundary for client-IP resolution. DEFAULT UNTRUSTED —
+  // without this switch the socket peer is used and caller-supplied
+  // forwarding headers are ignored. Enabling this safely in production is an
+  // unresolved infra decision (needs Cloudflare-proxied backend ingress AND
+  // direct origin ingress blocked/validated).
+  TRUST_CF_CONNECTING_IP: z
+    .string()
+    .default("false")
+    .transform((v) => v === "true"),
   ALLOW_FIXED_SEED: z
     .string()
     .default("true")
@@ -53,13 +77,6 @@ const envSchema = z.object({
 });
 
 export type AppEnv = z.infer<typeof envSchema>;
-
-interface GuestRecord {
-  principalId: string;
-}
-
-const guestStore = new Map<string, GuestRecord>();
-
 
 interface ConnectionContext {
   matchId: string;
@@ -179,7 +196,18 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
   await app.register(fastifyRateLimit, {
     max: 240,
     timeWindow: "1 minute",
-    errorResponseBuilder: () => ({ error: "RATE_LIMITED" }),
+    // THE-37a: bucket by the same client-IP resolver used for Sb-Forwarded-For.
+    // Default-untrusted means every request buckets on the socket peer —
+    // exactly today's behaviour — until the trust switch is deliberately set.
+    keyGenerator: (request) => getClientIp(request, env.TRUST_CF_CONNECTING_IP),
+    // errorResponseBuilder's return value is THROWN by the plugin (v10):
+    // returning a plain object lands in the error handler as a 500. Throw a
+    // status-coded error so clients get the 429 the limiter intends.
+    errorResponseBuilder: (_request, context) => {
+      const err = new Error("RATE_LIMITED") as Error & { statusCode: number };
+      err.statusCode = context.statusCode;
+      return err;
+    },
   });
 
   // THE-26: one heartbeat timer per app (not per socket). Each tick terminates
@@ -217,31 +245,87 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     clearInterval(heartbeatTimer);
   });
 
-  function resolvePrincipal(request: FastifyRequest, reply: FastifyReply): string {
-    const existing = request.cookies.lv_guest;
-    if (existing) {
-      const unsigned = request.unsignCookie(existing);
+  // THE-37a: durable identity lives in Supabase auth.users; the browser holds
+  // a server-minted anonymous session in the signed httpOnly lv_session
+  // cookie. The publishable-key client is stateless (tokens passed per call);
+  // the secret key is used for signInAnonymously only, per request.
+  const sessionEnv: SessionEnv = {
+    SUPABASE_URL: env.SUPABASE_URL,
+    SUPABASE_PUBLISHABLE_KEY: env.SUPABASE_PUBLISHABLE_KEY,
+    SUPABASE_SECRET_KEY: env.SUPABASE_SECRET_KEY,
+  };
+  const verifyClient = createVerifyClient(sessionEnv);
+  const cookieOpts = {
+    production: env.NODE_ENV === "production",
+    ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
+  };
+  const transientUnavailable = (reply: FastifyReply) =>
+    reply.code(503).send({ error: "AUTH_TEMPORARILY_UNAVAILABLE" });
+
+  type PrincipalOutcome =
+    | { kind: "ok"; principalId: string | null }
+    | { kind: "transient" };
+
+  /**
+   * Verify a presented session and return its principal. NEVER mints.
+   * Cookie precedence: valid lv_session wins; legacy lv_guest is cleared and
+   * (when mint=true) bridged into a fresh anonymous session; definitive
+   * invalidity behaves like absence; transient failure preserves lv_session
+   * byte-for-byte and fails closed.
+   */
+  async function resolveSession(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    mint: boolean,
+  ): Promise<PrincipalOutcome> {
+    const raw = request.cookies.lv_session;
+    if (raw) {
+      const unsigned = request.unsignCookie(raw);
       if (unsigned.valid && unsigned.value) {
-        const record = guestStore.get(unsigned.value);
-        if (record) return record.principalId;
-        const principalId = unsigned.value;
-        guestStore.set(principalId, { principalId });
-        return principalId;
+        const tokens = decodeSessionCookie(unsigned.value);
+        if (tokens) {
+          const result = await verifyTokens(verifyClient, tokens);
+          if (result.kind === "transient") return { kind: "transient" };
+          if (result.kind === "ok") {
+            if (result.rotated) setSessionCookie(reply, result.rotated, cookieOpts);
+            if (request.cookies.lv_guest) clearLegacyGuestCookie(reply, cookieOpts);
+            return { kind: "ok", principalId: result.principalId };
+          }
+          // definitive invalid: fall through and behave as absent
+        }
+        // unknown envelope version / malformed: definitive, behave as absent
       }
+      // bad signature: definitive, behave as absent
     }
-    const principalId = randomBytes(16).toString("hex");
-    guestStore.set(principalId, { principalId });
-    reply.setCookie("lv_guest", principalId, {
-      httpOnly: true,
-      // Cross-origin (frontend/backend on separate domains) needs SameSite=None
-      // + Secure to be sent at all; same-origin dev keeps the stricter default.
-      sameSite: env.NODE_ENV === "production" ? "none" : "lax",
-      secure: env.NODE_ENV === "production",
-      path: "/",
-      signed: true,
-      ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
-    });
-    return principalId;
+
+    const hadLegacyGuest = Boolean(request.cookies.lv_guest);
+    if (!mint) {
+      if (hadLegacyGuest) clearLegacyGuestCookie(reply, cookieOpts);
+      return { kind: "ok", principalId: null };
+    }
+
+    const minted = await mintAnonymousSession(sessionEnv, getClientIp(request, env.TRUST_CF_CONNECTING_IP));
+    if (minted.kind !== "ok") return { kind: "transient" };
+    setSessionCookie(reply, minted.tokens, cookieOpts);
+    if (hadLegacyGuest) clearLegacyGuestCookie(reply, cookieOpts);
+    const verified = await verifyTokens(verifyClient, minted.tokens);
+    if (verified.kind !== "ok") return { kind: "transient" };
+    return { kind: "ok", principalId: verified.principalId };
+  }
+
+  /** Read paths: resolve only, never mint. Null principal = anonymous observer. */
+  function resolveExistingPrincipal(request: FastifyRequest, reply: FastifyReply) {
+    return resolveSession(request, reply, false);
+  }
+
+  /** Write paths that require a durable identity: resolve, minting if absent. */
+  async function requirePrincipal(request: FastifyRequest, reply: FastifyReply) {
+    const outcome = await resolveSession(request, reply, true);
+    if (outcome.kind === "ok" && outcome.principalId === null) {
+      // Unreachable: mint=true always yields a principal on success.
+      throw new Error("requirePrincipal resolved without a principal");
+    }
+    return outcome as { kind: "ok"; principalId: string } | { kind: "transient" };
   }
 
   app.get("/health/live", async () => ({ status: "ok" }));
@@ -290,7 +374,6 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     if (!parsed.success) {
       return reply.code(400).send({ error: "COMMAND_SCHEMA_INVALID" });
     }
-    const principalId = resolvePrincipal(request, reply);
     const seed =
       parsed.data.seed && env.ALLOW_FIXED_SEED ? parsed.data.seed : randomBytes(12).toString("hex");
     // Fixed seeds derive a stable matchId so agent RNG (which mixes matchId) is reproducible.
@@ -320,7 +403,11 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     };
 
     if (parsed.data.mode === "human-vs-ai") {
-      manager.createHumanVsAi({ matchId, seed, humanPrincipalId: principalId, events: roomEvents });
+      // THE-37a: the only path that mints a durable identity. all-ai matches
+      // and read endpoints never consume the anonymous-signup bucket.
+      const principal = await requirePrincipal(request, reply);
+      if (principal.kind === "transient") return transientUnavailable(reply);
+      manager.createHumanVsAi({ matchId, seed, humanPrincipalId: principal.principalId, events: roomEvents });
     } else {
       manager.createAllAi({ matchId, seed, events: roomEvents });
     }
@@ -334,8 +421,9 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     if (!room) {
       return reply.code(404).send({ error: "MATCH_NOT_FOUND_OR_FORBIDDEN" });
     }
-    const principalId = resolvePrincipal(request, reply);
-    const view = room.viewForPrincipal(principalId);
+    const principal = await resolveExistingPrincipal(request, reply);
+    if (principal.kind === "transient") return transientUnavailable(reply);
+    const view = room.viewForPrincipal(principal.principalId ?? "observer");
     if (!view) {
       return reply.code(403).send({ error: "MATCH_NOT_FOUND_OR_FORBIDDEN" });
     }
@@ -392,7 +480,30 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     }
   }
 
-  app.get("/api/v1/matches/:id/stream", { websocket: true }, (socket, request) => {
+  app.get(
+    "/api/v1/matches/:id/stream",
+    {
+      websocket: true,
+      // THE-37a: authenticate BEFORE the upgrade completes. A transient
+      // identity failure rejects the handshake with 503 (the existing client
+      // treats a failed upgrade as recoverable and retries with backoff);
+      // definitive absence proceeds to the handler, which closes with the
+      // established 4003/4004 codes. The session cookie is never cleared on
+      // a transient failure.
+      preValidation: async (request, reply) => {
+        const matchId = (request.params as { id: string }).id;
+        const room = manager.get(matchId);
+        if (!room || room.mode !== "human-vs-ai") return;
+        const principal = await resolveExistingPrincipal(request, reply);
+        if (principal.kind === "transient") {
+          await transientUnavailable(reply);
+          return reply;
+        }
+        (request as FastifyRequest & { wsPrincipalId: string | null }).wsPrincipalId =
+          principal.principalId;
+      },
+    },
+    (socket, request) => {
     const matchId = (request.params as { id: string }).id;
     const room = manager.get(matchId);
     if (!room) {
@@ -401,11 +512,8 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     }
     let principalId: string | null = null;
     if (room.mode === "human-vs-ai") {
-      const existing = request.cookies.lv_guest;
-      const unsigned = existing ? request.unsignCookie(existing) : null;
-      if (unsigned?.valid && unsigned.value) {
-        principalId = unsigned.value;
-      }
+      principalId =
+        (request as FastifyRequest & { wsPrincipalId?: string | null }).wsPrincipalId ?? null;
       if (!principalId || !room.seatIdForPrincipal(principalId)) {
         socket.close(4003, "AUTH_REQUIRED");
         return;
@@ -636,9 +744,16 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
       if (set && set.size === 0) connections.delete(matchId);
       if (!conn.terminatedByHeartbeat) manager.touch(matchId);
     });
-  });
+    },
+  );
 
-  app.setErrorHandler((error: Error, request, reply) => {
+  app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
+    // Status-coded errors (e.g. the 429 raised by @fastify/rate-limit) keep
+    // their status; only genuinely unexpected errors collapse to 500.
+    if (typeof error.statusCode === "number" && error.statusCode < 500) {
+      void reply.code(error.statusCode).send({ error: error.message });
+      return;
+    }
     request.log.error({ err: error.message }, "unhandled error");
     void reply.code(500).send({ error: "TEMPORARY_STORAGE_FAILURE" });
   });

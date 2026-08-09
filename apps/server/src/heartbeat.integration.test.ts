@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
 import { RoomManager } from "@qiju/session-runtime";
 import { buildApp } from "./app.js";
+import { appEnv, cookiePair } from "./test-helpers.js";
 
 const HEARTBEAT_MS = 150;
 
@@ -24,10 +25,8 @@ describe("websocket heartbeat (short interval)", () => {
   beforeAll(async () => {
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     app = await buildApp({
+      ...appEnv(),
       PORT: port,
-      LOG_LEVEL: "silent",
-      ALLOW_FIXED_SEED: "true",
-      COOKIE_SECRET: "heartbeat-test-secret-key",
       WS_HEARTBEAT_INTERVAL_MS: HEARTBEAT_MS,
     });
     heartbeatHandle = setIntervalSpy.mock.results.find(
@@ -54,7 +53,8 @@ describe("websocket heartbeat (short interval)", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { matchId: string };
-    const cookie = (res.headers["set-cookie"] as string).split(";")[0]!;
+    // all-ai matches mint no session (THE-37a); only human-vs-ai sets one.
+    const cookie = cookiePair(res.headers["set-cookie"], "lv_session") ?? "";
     return { matchId: body.matchId, cookie };
   }
 
@@ -136,9 +136,8 @@ describe("websocket heartbeat (short interval)", () => {
   it("clears the heartbeat timer on shutdown", async () => {
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const standalone = await buildApp({
+      ...appEnv(),
       PORT: 4202,
-      LOG_LEVEL: "silent",
-      COOKIE_SECRET: "heartbeat-test-secret-key",
       WS_HEARTBEAT_INTERVAL_MS: HEARTBEAT_MS,
     });
     const handle = setIntervalSpy.mock.results.find(
