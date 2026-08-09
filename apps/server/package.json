@@ -24,6 +24,7 @@
     "@qiju/replay": "workspace:*",
     "@qiju/rules-demo": "workspace:*",
     "@qiju/session-runtime": "workspace:*",
+    "@supabase/supabase-js": "^2.112.2",
     "fastify": "^5.2.0",
     "ws": "^8.21.1",
     "zod": "^3.24.1"

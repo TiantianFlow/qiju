@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
 import { buildApp } from "./app.js";
+import { appEnv, cookiePair } from "./test-helpers.js";
 
 interface Envelope {
   type: string;
@@ -59,12 +60,7 @@ describe("server integration (real WebSocket)", () => {
   const port = 4199;
 
   beforeAll(async () => {
-    app = await buildApp({
-      PORT: port,
-      LOG_LEVEL: "silent",
-      ALLOW_FIXED_SEED: "true",
-      COOKIE_SECRET: "integration-test-secret-key",
-    });
+    app = await buildApp({ ...appEnv(), PORT: port });
     await app.listen({ port });
   });
 
@@ -80,7 +76,8 @@ describe("server integration (real WebSocket)", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { matchId: string };
-    const cookie = (res.headers["set-cookie"] as string).split(";")[0]!;
+    // all-ai matches mint no session (THE-37a); only human-vs-ai sets one.
+    const cookie = cookiePair(res.headers["set-cookie"], "lv_session") ?? "";
     return { matchId: body.matchId, cookie };
   }
 
