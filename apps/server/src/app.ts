@@ -34,7 +34,7 @@ import {
   createVerifyClient,
   decodeSessionCookie,
   getClientIp,
-  mintAnonymousSession,
+  sessionDeps,
   setSessionCookie,
   verifyTokens,
   type SessionEnv,
@@ -304,7 +304,7 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
       return { kind: "ok", principalId: null };
     }
 
-    const minted = await mintAnonymousSession(sessionEnv, getClientIp(request, env.TRUST_CF_CONNECTING_IP));
+    const minted = await sessionDeps.mint(sessionEnv, getClientIp(request, env.TRUST_CF_CONNECTING_IP));
     if (minted.kind !== "ok") return { kind: "transient" };
     setSessionCookie(reply, minted.tokens, cookieOpts);
     if (hadLegacyGuest) clearLegacyGuestCookie(reply, cookieOpts);

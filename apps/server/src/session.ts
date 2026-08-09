@@ -91,8 +91,10 @@ const AUTH_CLIENT_OPTIONS = {
 /** Overridable seams for fault injection in tests; defaults are the real factories. */
 export const sessionDeps: {
   verifyClientFactory: (env: SessionEnv) => SupabaseClient;
+  mint: (env: SessionEnv, clientIp: string) => Promise<{ kind: "ok"; tokens: SessionTokens } | { kind: "transient" }>;
 } = {
   verifyClientFactory: (env) => createClient(env.SUPABASE_URL, env.SUPABASE_PUBLISHABLE_KEY, AUTH_CLIENT_OPTIONS),
+  mint: (env, clientIp) => mintAnonymousSession(env, clientIp),
 };
 
 /** Publishable-key client: getClaims + refreshSession only. Stateless by construction. */

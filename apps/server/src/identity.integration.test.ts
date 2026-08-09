@@ -6,9 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 import WebSocket from "ws";
 import { buildApp } from "./app.js";
 import {
-  clearLegacyGuestCookie,
   decodeSessionCookie,
-  encodeSessionCookie,
   setSessionCookie,
 } from "./session.js";
 import { appEnv, cookiePair, cookieValueDecoded, getAuthUser, requireSupabaseEnv } from "./test-helpers.js";
