@@ -424,6 +424,141 @@ describe("server unit", () => {
     }
   });
 
+  it("Verifier HIGH regression: OAuth start rotates, linkIdentity conflicts — the FAIL response carries the rotated lv_session", async () => {
+    // Expired access token -> verifyTokens refresh rotates -> linkIdentity
+    // reports identity_already_exists. The browser must receive the ROTATED
+    // session, not be left holding the possibly-invalidated old refresh
+    // token (the THE-42 career-detach class through another door).
+    const realVerify = sessionDeps.verifyClientFactory;
+    sessionDeps.verifyClientFactory = () =>
+      ({
+        auth: {
+          getClaims: async (token: string) =>
+            token === "expired-at"
+              ? { data: null, error: { status: 401, message: "expired" } }
+              : { data: { claims: { sub: "unit-user-uuid" } }, error: null },
+          refreshSession: async () => ({
+            data: { session: { access_token: "rotated-at", refresh_token: "rotated-rt" } },
+            error: null,
+          }),
+          getUser: async () => ({
+            data: { user: { id: "unit-user-uuid", is_anonymous: true } },
+            error: null,
+          }),
+        },
+      }) as never;
+    const { oauthDeps } = await import("./oauth.js");
+    const realFlow = oauthDeps.flowClientFactory;
+    oauthDeps.flowClientFactory = () =>
+      ({
+        auth: {
+          setSession: async () => ({ error: null }),
+          getSession: async () => ({
+            data: { session: { access_token: "rotated-at", refresh_token: "rotated-rt" } },
+          }),
+          linkIdentity: async () => ({
+            data: null,
+            error: { status: 422, code: "identity_already_exists" },
+          }),
+          exchangeCodeForSession: async () => ({ data: null, error: { status: 400 } }),
+        },
+      }) as never;
+    try {
+      const flagged = await buildApp({
+        LOG_LEVEL: "silent",
+        COOKIE_SECRET: "unit-test-secret-key",
+        SUPABASE_URL: "http://127.0.0.1:1",
+        SUPABASE_PUBLISHABLE_KEY: "unit-publishable",
+        SUPABASE_SECRET_KEY: "unit-secret",
+        FEATURE_ACCOUNTS: "true",
+        PUBLIC_API_ORIGIN: "https://api.example.com",
+        WEB_ORIGIN: "https://app.example.com",
+      });
+      await flagged.ready();
+      const { encodeSessionCookie } = await import("./session.js");
+      const envelope = encodeSessionCookie({ accessToken: "expired-at", refreshToken: "old-rt" });
+      const signedValue = flagged.signCookie(envelope);
+      const res = await flagged.inject({
+        method: "POST",
+        url: "/api/v1/auth/oauth/start",
+        payload: { provider: "google", returnTo: "/account" },
+        headers: {
+          "x-lotveil-request": "oauth",
+          cookie: `lv_session=${encodeURIComponent(signedValue)}`,
+        },
+      });
+      expect(res.statusCode).toBe(409);
+      expect((res.json() as { error: string }).error).toBe("ACCOUNT_ALREADY_EXISTS");
+      // The rotated session MUST be written even though the flow failed.
+      const rotatedPair = cookiePair(res.headers["set-cookie"], "lv_session");
+      expect(rotatedPair).toBeTruthy();
+      const unsigned = flagged.unsignCookie(decodeURIComponent(rotatedPair!.split("=")[1]!));
+      expect(unsigned.valid).toBe(true);
+      const { decodeSessionCookie } = await import("./session.js");
+      const written = decodeSessionCookie(unsigned.value!)!;
+      expect(written.refreshToken).toBe("rotated-rt");
+      expect(written.refreshToken).not.toBe("old-rt");
+      await flagged.close();
+    } finally {
+      sessionDeps.verifyClientFactory = realVerify;
+      oauthDeps.flowClientFactory = realFlow;
+    }
+  });
+
+  it("Verifier MEDIUM: a transient exchange failure consumes lv_oauth and 303-redirects with auth=restart (no raw JSON)", async () => {
+    const { oauthDeps, encodeOAuthCookie } = await import("./oauth.js");
+    const realFlow = oauthDeps.flowClientFactory;
+    oauthDeps.flowClientFactory = () =>
+      ({
+        auth: {
+          exchangeCodeForSession: async () => ({ data: null, error: { status: 500 } }),
+        },
+      }) as never;
+    try {
+      const flagged = await buildApp({
+        LOG_LEVEL: "silent",
+        COOKIE_SECRET: "unit-test-secret-key",
+        SUPABASE_URL: "http://127.0.0.1:1",
+        SUPABASE_PUBLISHABLE_KEY: "unit-publishable",
+        SUPABASE_SECRET_KEY: "unit-secret",
+        FEATURE_ACCOUNTS: "true",
+        PUBLIC_API_ORIGIN: "https://api.example.com",
+        WEB_ORIGIN: "https://app.example.com",
+      });
+      await flagged.ready();
+      const transaction = {
+        state: "state-transient",
+        sdkFlowId: "flow-1",
+        verifierStorageKey: "sb-x-auth-token-code-verifier",
+        verifier: "v-123",
+        intent: "login" as const,
+        expectedPrincipalId: null,
+        provider: "google" as const,
+        returnTo: "/account",
+        issuedAt: Date.now(),
+      };
+      const envelope = encodeOAuthCookie([transaction]);
+      const signedValue = flagged.signCookie(envelope);
+      const res = await flagged.inject({
+        method: "GET",
+        url: `/api/v1/auth/oauth/callback?code=c1&state=state-transient`,
+        headers: { cookie: `lv_oauth=${encodeURIComponent(signedValue)}` },
+      });
+      // A redirect to the frontend restart page, NOT a raw 503 JSON blob.
+      expect(res.statusCode).toBe(303);
+      const location = res.headers.location as string;
+      expect(location).toContain("https://app.example.com/account");
+      expect(location).toContain("auth=restart");
+      // lv_oauth consumed (cleared).
+      const cleared = res.headers["set-cookie"];
+      const headers = Array.isArray(cleared) ? cleared : cleared ? [cleared] : [];
+      expect(headers.some((h) => h.startsWith("lv_oauth="))).toBe(true);
+      await flagged.close();
+    } finally {
+      oauthDeps.flowClientFactory = realFlow;
+    }
+  });
+
   it("THE-42 regression: a 429 during refresh yields 503, no Set-Cookie, and no mint on the mint path", async () => {
     // Expired access token (401 from getClaims) + rate-limited refresh
     // (429). The ONLY mint path is demo-match creation; if the 429 were

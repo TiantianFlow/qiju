@@ -258,7 +258,21 @@ export type StartFailureCode =
 
 export type StartOutcome =
   | { kind: "ok"; redirectUrl: string; transaction: OAuthTransaction; rotated: SessionTokens | null }
-  | { kind: "fail"; http: number; code: StartFailureCode };
+  | {
+      kind: "fail";
+      http: number;
+      code: StartFailureCode;
+      /**
+       * Verifier fix (HIGH): if the session ROTATED before the failure
+       * (setSession/refresh), the rotated tokens MUST be written to
+       * lv_session even on failure. "Preserving" the pre-rotation cookie
+       * would leave the browser holding a refresh token the Auth server may
+       * already have invalidated — the THE-42 career-detach class through
+       * another door. Null when no rotation happened (cookie truly
+       * unchanged).
+       */
+      rotated: SessionTokens | null;
+    };
 
 export interface StartParams {
   provider: OAuthProvider;
@@ -297,9 +311,12 @@ function isMisconfiguration(err: AuthJsError): boolean {
 
 /**
  * Orchestrate an OAuth start. Never throws; the outcome is expressed in
- * StartOutcome. Never mutates lv_session except to rotate it when setSession
- * rotated the underlying tokens (returned via `rotated` for the caller to
- * persist alongside the transaction cookie).
+ * StartOutcome. If the session rotated at any point (verification refresh
+ * or setSession), the rotated tokens are returned on BOTH the ok and fail
+ * variants: the caller MUST persist a rotation whenever one is present,
+ * regardless of the outcome — keeping a pre-rotation cookie after a
+ * rotation discards valid credentials for a refresh token the Auth server
+ * may already have invalidated.
  */
 export async function oauthStart(
   env: AccountsEnv,
@@ -316,12 +333,12 @@ export async function oauthStart(
     // silent new-account flow over a presented-but-dead session).
     const resolved = await verifyTokens(verifyClient, params.sessionTokens);
     if (resolved.kind === "transient") {
-      return { kind: "fail", http: 503, code: "AUTH_TEMPORARILY_UNAVAILABLE" };
+      return { kind: "fail", http: 503, code: "AUTH_TEMPORARILY_UNAVAILABLE", rotated: null };
     }
     if (resolved.kind !== "ok") {
       // invalid (or the unreachable absent): a presented-but-dead session
       // must not silently start a new-account flow.
-      return { kind: "fail", http: 401, code: "SESSION_INVALID" };
+      return { kind: "fail", http: 401, code: "SESSION_INVALID", rotated: null };
     }
     // ok — effective tokens may have rotated during verification.
     const effective = resolved.rotated ?? params.sessionTokens;
@@ -339,25 +356,25 @@ export async function oauthStart(
           ? err.status === 408 || err.status === 429 || err.status >= 500
           : true;
       return transient
-        ? { kind: "fail", http: 503, code: "AUTH_TEMPORARILY_UNAVAILABLE" }
-        : { kind: "fail", http: 401, code: "SESSION_INVALID" };
+        ? { kind: "fail", http: 503, code: "AUTH_TEMPORARILY_UNAVAILABLE", rotated }
+        : { kind: "fail", http: 401, code: "SESSION_INVALID", rotated };
     }
     const user = userData.user;
-    if (!user) return { kind: "fail", http: 401, code: "SESSION_INVALID" };
+    if (!user) return { kind: "fail", http: 401, code: "SESSION_INVALID", rotated };
     // Invariant: the returned user id must match the verified token subject.
     if (user.id !== resolved.principalId) {
-      return { kind: "fail", http: 503, code: "AUTH_TEMPORARILY_UNAVAILABLE" };
+      return { kind: "fail", http: 503, code: "AUTH_TEMPORARILY_UNAVAILABLE", rotated };
     }
     if (user.is_anonymous === false) {
       // Already permanent — no provider trip needed.
-      return { kind: "fail", http: 409, code: "ALREADY_AUTHENTICATED" };
+      return { kind: "fail", http: 409, code: "ALREADY_AUTHENTICATED", rotated };
     }
     intent = "convert";
     expectedPrincipalId = user.id;
   } else if (params.presentedMalformedCookie) {
     // A presented-but-unreadable cookie is definitive invalidity: explicit
     // recovery required, not a silent new-account flow.
-    return { kind: "fail", http: 401, code: "SESSION_INVALID" };
+    return { kind: "fail", http: 401, code: "SESSION_INVALID", rotated: null };
   } else {
     intent = "login";
   }
@@ -379,15 +396,15 @@ export async function oauthStart(
     if (setError) {
       const err = setError as AuthJsError;
       if (isMisconfiguration(err)) {
-        return { kind: "fail", http: 503, code: "AUTH_LINKING_NOT_CONFIGURED" };
+        return { kind: "fail", http: 503, code: "AUTH_LINKING_NOT_CONFIGURED", rotated };
       }
       const transient =
         typeof err.status === "number"
           ? err.status === 408 || err.status === 429 || err.status >= 500
           : true;
       return transient
-        ? { kind: "fail", http: 503, code: "AUTH_TEMPORARILY_UNAVAILABLE" }
-        : { kind: "fail", http: 401, code: "SESSION_INVALID" };
+        ? { kind: "fail", http: 503, code: "AUTH_TEMPORARILY_UNAVAILABLE", rotated }
+        : { kind: "fail", http: 401, code: "SESSION_INVALID", rotated };
     }
     const { data: sessData } = await client.auth.getSession();
     if (
@@ -414,26 +431,30 @@ export async function oauthStart(
   if (error) {
     const err = error as AuthJsError;
     if (isMisconfiguration(err)) {
-      return { kind: "fail", http: 503, code: "AUTH_LINKING_NOT_CONFIGURED" };
+      return { kind: "fail", http: 503, code: "AUTH_LINKING_NOT_CONFIGURED", rotated };
     }
     if (err.code && CONFLICT_CODES.has(err.code)) {
-      // Fail safe: the guest cookie and every match_seats.user_id stay
-      // untouched. No automatic sign-in fallback, no merge.
-      return { kind: "fail", http: 409, code: "ACCOUNT_ALREADY_EXISTS" };
+      // Fail safe: no automatic sign-in fallback, no merge, and every
+      // match_seats.user_id untouched. If the session rotated on the way
+      // here, the rotation is still returned for the caller to persist —
+      // preserving the PRE-rotation cookie would strand valid credentials.
+      return { kind: "fail", http: 409, code: "ACCOUNT_ALREADY_EXISTS", rotated };
     }
     const transient =
       typeof err.status === "number"
         ? err.status === 408 || err.status === 429 || err.status >= 500
         : true;
-    if (transient) return { kind: "fail", http: 503, code: "AUTH_TEMPORARILY_UNAVAILABLE" };
+    if (transient) {
+      return { kind: "fail", http: 503, code: "AUTH_TEMPORARILY_UNAVAILABLE", rotated };
+    }
     // linkIdentity rejecting the current token definitively.
-    return { kind: "fail", http: 401, code: "SESSION_INVALID" };
+    return { kind: "fail", http: 401, code: "SESSION_INVALID", rotated };
   }
 
   const providerUrl = (data as { url?: string } | null)?.url;
   if (!providerUrl) {
     // No URL means nothing to navigate to — treat as misconfiguration.
-    return { kind: "fail", http: 503, code: "AUTH_LINKING_NOT_CONFIGURED" };
+    return { kind: "fail", http: 503, code: "AUTH_LINKING_NOT_CONFIGURED", rotated };
   }
   const flowId =
     (data as { flowId?: string } | null)?.flowId ??
@@ -441,7 +462,7 @@ export async function oauthStart(
   const slot = flow.capture();
   if (!slot) {
     // The adapter contract failed (SDK upgrade changed storage behaviour).
-    return { kind: "fail", http: 503, code: "AUTH_TEMPORARILY_UNAVAILABLE" };
+    return { kind: "fail", http: 503, code: "AUTH_TEMPORARILY_UNAVAILABLE", rotated };
   }
 
   return {
@@ -578,7 +599,16 @@ export async function oauthCallback(
         return { kind: "failed", code: "not_permanent_after_conversion" };
       }
     }
-    const snapshot = await params.snapshotExists(data.user.id);
+    // Verifier fix (MEDIUM): the "never throws" contract must hold even
+    // when the snapshot CHECK fails. An unverifiable snapshot is treated
+    // as a failed conversion — lv_session is NOT written and the caller
+    // still consumes the transaction and redirects.
+    let snapshot: boolean;
+    try {
+      snapshot = await params.snapshotExists(data.user.id);
+    } catch {
+      return { kind: "failed", code: "snapshot_check_failed" };
+    }
     if (!snapshot) {
       // Fail-closed contract: a conversion is not visible as successful
       // unless its audit record exists.

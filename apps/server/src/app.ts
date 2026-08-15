@@ -969,9 +969,13 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
       });
 
       if (outcome.kind === "fail") {
-        // Error matrix: lv_session is preserved on every failure path —
-        // this handler never sets or clears it except for a setSession
-        // rotation on success.
+        // Verifier fix (HIGH): if the session rotated before the failure,
+        // the rotated tokens MUST be written even now. Keeping the
+        // pre-rotation cookie would leave the browser holding a refresh
+        // token the Auth server may already have invalidated — the THE-42
+        // career-detach class through another door. When rotated is null
+        // the cookie is genuinely untouched.
+        if (outcome.rotated) setSessionCookie(reply, outcome.rotated, cookieOpts);
         const txHash = presented.tokens
           ? transactionCorrelationHash(presented.tokens.accessToken.slice(-16))
           : "no-session";
@@ -1064,7 +1068,13 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
           request.log.error({ phase: "oauth_callback", outcome: "failed", code: result.code, tx: txLog }, "oauth invariant failure");
           return redirectWith(matched?.returnTo ?? "/account", { auth: "failed" });
         case "transient":
-          return transientUnavailable(reply);
+          // Verifier fix (MEDIUM): consuming the transaction IS correct per
+          // design (Auth JS removed the verifier; the code's outcome is
+          // uncertain). The defect was the raw 503 JSON body — a user
+          // mid-flow must land on the frontend restart page like every
+          // other terminal callback state.
+          request.log.warn({ phase: "oauth_callback", outcome: "transient", tx: txLog }, "oauth exchange transient failure");
+          return redirectWith(matched?.returnTo ?? "/account", { auth: "restart" });
       }
     });
 

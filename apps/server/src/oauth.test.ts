@@ -238,7 +238,7 @@ describe("oauthStart — intent selection and failure taxonomy", () => {
         callbackUrl: "https://api.example/cb",
         now: 5_000,
       });
-      expect(outcome).toEqual({ kind: "fail", http: 409, code: "ALREADY_AUTHENTICATED" });
+      expect(outcome).toEqual({ kind: "fail", http: 409, code: "ALREADY_AUTHENTICATED", rotated: null });
       expect(linkCalls).toBe(0);
     } finally {
       restore();
@@ -264,7 +264,7 @@ describe("oauthStart — intent selection and failure taxonomy", () => {
         callbackUrl: "https://api.example/cb",
         now: 5_000,
       });
-      expect(outcome).toEqual({ kind: "fail", http: 401, code: "SESSION_INVALID" });
+      expect(outcome).toEqual({ kind: "fail", http: 401, code: "SESSION_INVALID", rotated: null });
       expect(oauthCalls).toBe(0);
     } finally {
       restore();
@@ -283,7 +283,12 @@ describe("oauthStart — intent selection and failure taxonomy", () => {
         callbackUrl: "https://api.example/cb",
         now: 5_000,
       });
-      expect(outcome).toEqual({ kind: "fail", http: 503, code: "AUTH_TEMPORARILY_UNAVAILABLE" });
+      expect(outcome).toEqual({
+        kind: "fail",
+        http: 503,
+        code: "AUTH_TEMPORARILY_UNAVAILABLE",
+        rotated: null,
+      });
     } finally {
       restoreVerify();
     }
@@ -303,7 +308,7 @@ describe("oauthStart — intent selection and failure taxonomy", () => {
         callbackUrl: "https://api.example/cb",
         now: 5_000,
       });
-      expect(outcome).toEqual({ kind: "fail", http: 409, code: "ACCOUNT_ALREADY_EXISTS" });
+      expect(outcome).toEqual({ kind: "fail", http: 409, code: "ACCOUNT_ALREADY_EXISTS", rotated: null });
     } finally {
       restore();
       restoreVerify();
@@ -324,7 +329,61 @@ describe("oauthStart — intent selection and failure taxonomy", () => {
         callbackUrl: "https://api.example/cb",
         now: 5_000,
       });
-      expect(outcome).toEqual({ kind: "fail", http: 503, code: "AUTH_LINKING_NOT_CONFIGURED" });
+      expect(outcome).toEqual({
+        kind: "fail",
+        http: 503,
+        code: "AUTH_LINKING_NOT_CONFIGURED",
+        rotated: null,
+      });
+    } finally {
+      restore();
+      restoreVerify();
+    }
+  });
+
+  it("HIGH regression: setSession rotates, then linkIdentity conflicts — the FAIL outcome carries the rotation so it is never thrown away", async () => {
+    // The exact sequence from the verification report: expired access
+    // token -> verifyTokens refresh rotates (at-1/rt-1 -> at-2/rt-2) ->
+    // setSession succeeds -> linkIdentity fails identity_already_exists.
+    // The old StartOutcome fail variant had no rotation channel, so the
+    // new tokens were dropped and the browser kept the (possibly
+    // invalidated) old refresh token.
+    sessionDeps.verifyClientFactory = () =>
+      ({
+        auth: {
+          getClaims: async (token: string) =>
+            token === "at-1"
+              ? { data: null, error: { status: 401, message: "token expired" } }
+              : { data: { claims: { sub: "user-uuid-1" } }, error: null },
+          refreshSession: async () => ({
+            data: { session: { access_token: "at-2", refresh_token: "rt-2" } },
+            error: null,
+          }),
+          getUser: async () => ({
+            data: { user: { id: "user-uuid-1", is_anonymous: true } },
+            error: null,
+          }),
+        },
+      }) as never;
+    stubFlowClient({
+      linkIdentity: async () => ({ data: null, error: { status: 422, code: "identity_already_exists" } }),
+    });
+    try {
+      const outcome = await oauthStart(env, {
+        provider: "google",
+        returnTo: "/account",
+        sessionTokens: tokens,
+        presentedMalformedCookie: false,
+        callbackUrl: "https://api.example/cb",
+        now: 5_000,
+      });
+      expect(outcome.kind).toBe("fail");
+      if (outcome.kind === "fail") {
+        expect(outcome.code).toBe("ACCOUNT_ALREADY_EXISTS");
+        // The load-bearing assertion: the rotation SURVIVES the failure.
+        expect(outcome.rotated).toEqual({ accessToken: "at-2", refreshToken: "rt-2" });
+        expect(outcome.rotated?.refreshToken).not.toBe("rt-1");
+      }
     } finally {
       restore();
       restoreVerify();
@@ -510,6 +569,27 @@ describe("oauthCallback — error matrix", () => {
         snapshotExists: async () => false,
       });
       expect(result.kind).toBe("failed");
+    } finally {
+      restore();
+    }
+  });
+
+  it("a THROWING snapshot check is contained: failed conversion, no tokens, never-throws contract holds", async () => {
+    stubFlowClient({});
+    try {
+      const result = await oauthCallback(env, {
+        code: "code-1",
+        state: "state-abc",
+        providerError: null,
+        providerErrorCode: null,
+        transactions: [tx()],
+        now: 2_000,
+        snapshotExists: async () => {
+          throw new Error("simulated snapshot-store failure");
+        },
+      });
+      expect(result.kind).toBe("failed");
+      expect(result).not.toHaveProperty("tokens");
     } finally {
       restore();
     }
