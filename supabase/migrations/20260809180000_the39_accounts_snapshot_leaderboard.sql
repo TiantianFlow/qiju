@@ -127,6 +127,12 @@ begin
       max(n.completed_at) as last_match_completed_at,
       -- the algebraic equivalent of folding updateAppraiserRating from
       -- packages/ranking: K=32 for matches 1..20, K=16 from match 21.
+      -- LATENT ASSUMPTION (recorded, deliberately not restructured): the
+      -- K boundary advances per HUMAN SEAT ROW, not per match. With
+      -- today's modes exactly one human seat exists per match (seat1 in
+      -- human-vs-ai; none in all-ai), so the two coincide. A future
+      -- multi-human mode must revisit this formula AND its contract test
+      -- (test M13 pins the assumption so such a mode fails loudly).
       1000::double precision + coalesce(sum(
         (case when n.match_number <= 20 then 32 else 16 end)::double precision
         * n.utility_numerator::double precision
@@ -167,6 +173,11 @@ $$;
 -- ---------------------------------------------------------------------------
 -- 3. Trigger: the conversion event is exactly is_anonymous true -> false.
 -- ---------------------------------------------------------------------------
+-- Functions get PUBLIC EXECUTE by default. This one returns TRIGGER so it
+-- cannot be called as an RPC, but the privilege must be absent, not merely
+-- unusable — same discipline as the table revokes above.
+revoke all on function public.capture_account_conversion_snapshot() from public, anon, authenticated;
+
 drop trigger if exists on_auth_user_converted_capture_snapshot on auth.users;
 create trigger on_auth_user_converted_capture_snapshot
   after update of is_anonymous on auth.users
@@ -227,6 +238,11 @@ as $$
       eligible_rows.user_id,
       count(distinct eligible_rows.match_id) as matches_played,
       sum(eligible_rows.realized_profit) as cumulative_realized_profit,
+      -- LATENT ASSUMPTION (recorded, deliberately not restructured):
+      -- match_number advances per human seat ROW, not per match. Today's
+      -- modes have exactly one human seat per match, so row order and
+      -- match order coincide; a future multi-human mode must rework the
+      -- K-boundary here and in the snapshot trigger (see M13).
       1000::double precision + sum(
         (case when eligible_rows.match_number <= 20 then 32 else 16 end)::double precision
         * eligible_rows.utility_numerator::double precision

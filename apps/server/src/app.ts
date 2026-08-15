@@ -37,7 +37,9 @@ import {
   sessionDeps,
   setSessionCookie,
   verifyTokens,
+  type CookieOptions,
   type SessionEnv,
+  type SessionTokens,
 } from "./session.js";
 import {
   buildPersistedMatch,
@@ -45,6 +47,21 @@ import {
   persistMatchCompletionFailOpen,
   type MatchPersistenceStore,
 } from "./persistence.js";
+import {
+  clearOAuthCookie,
+  isTransactionExpired,
+  oauthCallback,
+  oauthStart,
+  playerLabel,
+  readOAuthTransactions,
+  RETURN_TO_ALLOWLIST,
+  setOAuthCookie,
+  transactionCorrelationHash,
+  upsertTransaction,
+  type AccountsEnv,
+  type OAuthTransaction,
+} from "./oauth.js";
+import { tycoonTier } from "@qiju/ranking";
 import type { MatchResult } from "@qiju/game-core";
 
 const envSchema = z.object({
@@ -81,6 +98,19 @@ const envSchema = z.object({
   // THE-26: app-level WebSocket heartbeat interval. 30s default safely
   // undercuts Cloudflare's 100s idle-connection timeout (bid window is 120s).
   WS_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(50).default(30_000),
+  // THE-39: accounts/OAuth/leaderboard ship DARK. Default off; every
+  // user-visible surface for the feature is gated on this flag.
+  FEATURE_ACCOUNTS: z
+    .string()
+    .default("false")
+    .transform((v) => v === "true"),
+  // Server's own externally reachable origin, used to build the OAuth
+  // callback URL. Never derived from request Host/Origin headers.
+  PUBLIC_API_ORIGIN: z.string().url().optional(),
+  // Frontend origin the OAuth callback 303s to. Never request-derived.
+  WEB_ORIGIN: z.string().url().optional(),
+  // Domain-separated HMAC secret for pseudonymous leaderboard labels.
+  PLAYER_LABEL_SECRET: z.string().min(16).optional(),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;
@@ -127,6 +157,21 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
   const env = envSchema.parse(merged);
   if (env.NODE_ENV === "production" && !env.COOKIE_SECRET) {
     throw new Error("COOKIE_SECRET is required in production");
+  }
+  // THE-44: production cookies are SameSite=None; Secure, so the CORS
+  // allowlist is the ONLY control stopping an arbitrary origin from making
+  // credentialed reads (e.g. /api/v1/me/career). Falling back to
+  // `origin: true` with `credentials: true` reflects every origin — a
+  // footgun the moment CORS_ORIGIN is unset. Fail startup instead.
+  if (env.NODE_ENV === "production" && !(env.CORS_ORIGIN && env.CORS_ORIGIN.trim().length > 0)) {
+    throw new Error("CORS_ORIGIN is required in production (credentialed SameSite=None cookies have no safe default)");
+  }
+  // THE-39: the OAuth feature needs fixed origins — the callback URL and
+  // the final 303 are built only from these, never from request headers.
+  if (env.FEATURE_ACCOUNTS) {
+    if (!env.PUBLIC_API_ORIGIN || !env.WEB_ORIGIN) {
+      throw new Error("FEATURE_ACCOUNTS requires PUBLIC_API_ORIGIN and WEB_ORIGIN");
+    }
   }
   const cookieSecret = env.COOKIE_SECRET ?? "dev-only-insecure-secret-change-me";
   // THE-37b: resolve the persistence store at BUILD time, per app instance
@@ -827,6 +872,294 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
     });
     },
   );
+
+  // ---------------------------------------------------------------------
+  // THE-39 increment 2 — accounts: OAuth start/callback, /me, leaderboard.
+  // Everything in this block is DARK behind FEATURE_ACCOUNTS (default off).
+  // The browser never receives a Supabase token; conflicts fail safe and
+  // preserve lv_session byte-for-byte on every error path.
+  // ---------------------------------------------------------------------
+  const accountsEnv: AccountsEnv = {
+    ...sessionEnv,
+    FEATURE_ACCOUNTS: env.FEATURE_ACCOUNTS,
+    PUBLIC_API_ORIGIN: env.PUBLIC_API_ORIGIN,
+    WEB_ORIGIN: env.WEB_ORIGIN,
+    PLAYER_LABEL_SECRET: env.PLAYER_LABEL_SECRET,
+  };
+
+  if (env.FEATURE_ACCOUNTS) {
+    const labelSecret = env.PLAYER_LABEL_SECRET ?? cookieSecret;
+    const oauthCookieOpts: CookieOptions = {
+      production: env.NODE_ENV === "production",
+      ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
+    };
+    const callbackBase = `${env.PUBLIC_API_ORIGIN}/api/v1/auth/oauth/callback`;
+
+    // Narrow start limiter IN ADDITION to the global one (per design):
+    // 10/min/IP plus a tighter 3/min per presented principal for the
+    // convert path, so provider-roundtrip abuse can't hammer Auth.
+    const oauthLimiter = new Map<string, { count: number; resetAt: number }>();
+    const OAUTH_WINDOW_MS = 60_000;
+    function bucketLimited(key: string, limit: number): boolean {
+      const now = Date.now();
+      const entry = oauthLimiter.get(key);
+      if (!entry || entry.resetAt <= now) {
+        oauthLimiter.set(key, { count: 1, resetAt: now + OAUTH_WINDOW_MS });
+        return false;
+      }
+      entry.count += 1;
+      return entry.count > limit;
+    }
+    function oauthRateLimited(request: FastifyRequest, principalKey: string | null): boolean {
+      if (bucketLimited(`ip:${getClientIp(request, env.TRUST_CF_CONNECTING_IP)}`, 10)) return true;
+      if (principalKey && bucketLimited(`principal:${principalKey}`, 3)) return true;
+      return false;
+    }
+    app.addHook("onClose", async () => oauthLimiter.clear());
+
+    /** Read lv_session WITHOUT verifying against Auth (start re-verifies). */
+    function presentedSession(request: FastifyRequest): {
+      tokens: SessionTokens | null;
+      malformed: boolean;
+    } {
+      const raw = request.cookies.lv_session;
+      if (!raw) return { tokens: null, malformed: false };
+      const unsigned = request.unsignCookie(raw);
+      if (!unsigned.valid || !unsigned.value) return { tokens: null, malformed: true };
+      const tokens = decodeSessionCookie(unsigned.value);
+      return { tokens, malformed: tokens === null };
+    }
+
+    const startBodySchema = z.object({
+      provider: z.enum(["google"]),
+      returnTo: z.string().optional(),
+    });
+
+    /**
+     * POST /api/v1/auth/oauth/start — begins a PKCE flow. Returns the
+     * provider URL as JSON (a fetch cannot turn a 302 into top-level
+     * cross-origin navigation). POST-only, JSON-only, custom header
+     * required (forces a cross-origin preflight).
+     */
+    app.post("/api/v1/auth/oauth/start", async (request, reply) => {
+      if (request.headers["x-lotveil-request"] !== "oauth") {
+        return reply.code(400).send({ error: "INVALID_REQUEST" });
+      }
+      const presentedEarly = presentedSession(request);
+      if (oauthRateLimited(request, presentedEarly.tokens?.refreshToken.slice(-12) ?? null)) {
+        return reply.code(429).send({ error: "RATE_LIMITED" });
+      }
+      const parsed = startBodySchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "INVALID_REQUEST" });
+      }
+      const returnTo = parsed.data.returnTo ?? "/account";
+      if (!(RETURN_TO_ALLOWLIST as readonly string[]).includes(returnTo)) {
+        return reply.code(400).send({ error: "INVALID_REQUEST" });
+      }
+
+      const presented = presentedEarly;
+      const outcome = await oauthStart(accountsEnv, {
+        provider: parsed.data.provider,
+        returnTo,
+        sessionTokens: presented.tokens,
+        presentedMalformedCookie: presented.malformed,
+        callbackUrl: callbackBase,
+        now: Date.now(),
+      });
+
+      if (outcome.kind === "fail") {
+        // Error matrix: lv_session is preserved on every failure path —
+        // this handler never sets or clears it except for a setSession
+        // rotation on success.
+        const txHash = presented.tokens
+          ? transactionCorrelationHash(presented.tokens.accessToken.slice(-16))
+          : "no-session";
+        request.log.warn(
+          { phase: "oauth_start", code: outcome.code, provider: parsed.data.provider, tx: txHash },
+          "oauth start failed",
+        );
+        return reply.code(outcome.http).send({ error: outcome.code });
+      }
+
+      // Persist the transaction (cap 2, newest wins) and any rotation.
+      const existing = readOAuthTransactions(request);
+      const transactions = upsertTransaction(existing, outcome.transaction, Date.now());
+      setOAuthCookie(reply, transactions, oauthCookieOpts);
+      if (outcome.rotated) setSessionCookie(reply, outcome.rotated, cookieOpts);
+      return reply.send({ redirectUrl: outcome.redirectUrl });
+    });
+
+    /**
+     * GET /api/v1/auth/oauth/callback — Supabase redirects here with code+
+     * state or provider error fields. Validates the transaction, exchanges,
+     * rotates lv_session on success, consumes the transaction, and 303s to
+     * the configured frontend. Host/Origin are NEVER used to build URLs.
+     */
+    app.get("/api/v1/auth/oauth/callback", async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      reply.header("referrer-policy", "no-referrer");
+      const query = request.query as Record<string, string | undefined>;
+      const transactions = readOAuthTransactions(request);
+      const webOrigin = env.WEB_ORIGIN!;
+      const redirectWith = (returnTo: string, params: Record<string, string>) => {
+        const url = new URL(returnTo, webOrigin);
+        for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+        return reply.code(303).redirect(url.toString());
+      };
+      const consume = (tx: OAuthTransaction | null) => {
+        const remaining = (transactions ?? []).filter(
+          (t) =>
+            !(tx && t.state === tx.state) &&
+            !isTransactionExpired(t, Date.now()),
+        );
+        if (remaining.length > 0) setOAuthCookie(reply, remaining, oauthCookieOpts);
+        else clearOAuthCookie(reply, oauthCookieOpts);
+      };
+      // Find the matching transaction first so error paths can consume it.
+      const matched =
+        query.state && transactions
+          ? transactions.find(
+              (t) => !isTransactionExpired(t, Date.now()) && t.state === query.state,
+            )
+          : null;
+
+      // Consume the state on every exchange attempt (one-time).
+      const result = await oauthCallback(accountsEnv, {
+        code: query.code ?? null,
+        state: query.state ?? null,
+        providerError: query.error ?? null,
+        providerErrorCode: query.error_code ?? null,
+        transactions,
+        now: Date.now(),
+        snapshotExists: (userId) => resolvedMatchStore.snapshotExists(userId),
+      });
+      consume(matched ?? null);
+
+      const txLog = matched ? transactionCorrelationHash(matched.state) : "unknown";
+      switch (result.kind) {
+        case "success": {
+          // Only now is lv_session overwritten — all conversion invariants
+          // (expected principal, permanent status, snapshot exists) held.
+          setSessionCookie(reply, result.tokens, cookieOpts);
+          request.log.info(
+            { phase: "oauth_callback", outcome: "success", tx: txLog },
+            "oauth callback completed",
+          );
+          return redirectWith(result.transaction.returnTo, { auth: "ok" });
+        }
+        case "cancelled":
+          request.log.info({ phase: "oauth_callback", outcome: "cancelled", tx: txLog }, "oauth cancelled");
+          return redirectWith(matched?.returnTo ?? "/account", { auth: "cancelled" });
+        case "conflict":
+          // Fail safe: lv_session untouched, no fallback sign-in, no merge.
+          request.log.warn({ phase: "oauth_callback", outcome: "conflict", code: result.code, tx: txLog }, "oauth conflict");
+          return redirectWith(matched?.returnTo ?? "/account", { auth: "conflict" });
+        case "expired":
+          return redirectWith("/account", { auth: "expired" });
+        case "restart":
+          request.log.warn({ phase: "oauth_callback", outcome: "restart", code: result.code, tx: txLog }, "oauth exchange failed");
+          return redirectWith(matched?.returnTo ?? "/account", { auth: "restart" });
+        case "failed":
+          request.log.error({ phase: "oauth_callback", outcome: "failed", code: result.code, tx: txLog }, "oauth invariant failure");
+          return redirectWith(matched?.returnTo ?? "/account", { auth: "failed" });
+        case "transient":
+          return transientUnavailable(reply);
+      }
+    });
+
+    /**
+     * GET /api/v1/me — session status + authoritative conversion recovery.
+     * NEVER mints. A stale anonymous-era JWT whose database user is already
+     * permanent is recovered by rotating to a fresh session.
+     */
+    app.get("/api/v1/me", async (request, reply) => {
+      const principal = await resolveExistingPrincipal(request, reply);
+      if (principal.kind === "transient") return transientUnavailable(reply);
+      if (principal.principalId === null) {
+        return reply.send({ principal: "none", playerLabel: null });
+      }
+      // Authoritative status (the JWT's is_anonymous may be stale if the
+      // browser closed between identity linking and callback completion).
+      const presented = presentedSession(request);
+      if (presented.tokens) {
+        const { data, error } = await verifyClient.auth.getUser(presented.tokens.accessToken);
+        if (!error && data.user) {
+          if (data.user.is_anonymous === false) {
+            return reply.send({
+              principal: "account",
+              playerLabel: playerLabel(data.user.id, labelSecret),
+            });
+          }
+          return reply.send({
+            principal: "guest",
+            playerLabel: playerLabel(data.user.id, labelSecret),
+          });
+        }
+      }
+      // getUser unavailable but the session resolved: report guest without
+      // a recovery claim rather than failing the read.
+      return reply.send({
+        principal: "guest",
+        playerLabel: playerLabel(principal.principalId, labelSecret),
+      });
+    });
+
+    /**
+     * GET /api/v1/leaderboard — public, never mints, resolves an existing
+     * principal only to mark isSelf. Sort and exclusion live in the RPC;
+     * tier comes from packages/ranking (never duplicated thresholds).
+     */
+    app.get("/api/v1/leaderboard", async (request, reply) => {
+      const query = request.query as Record<string, string | undefined>;
+      const parsedOffset = Number(query.offset ?? "0");
+      const parsedLimit = Number(query.limit ?? "50");
+      if (
+        !Number.isSafeInteger(parsedOffset) ||
+        !Number.isSafeInteger(parsedLimit) ||
+        parsedOffset < 0 ||
+        parsedOffset > 100_000 ||
+        parsedLimit < 1 ||
+        parsedLimit > 100
+      ) {
+        return reply.code(400).send({ error: "INVALID_PAGINATION" });
+      }
+      const principal = await resolveExistingPrincipal(request, reply);
+      if (principal.kind === "transient") return transientUnavailable(reply);
+      try {
+        const page = await resolvedMatchStore.leaderboardPage(parsedOffset, parsedLimit);
+        const entries = page.rows.map((row) => ({
+          rank: row.rank,
+          playerLabel: playerLabel(row.userId, labelSecret),
+          isSelf: principal.principalId !== null && row.userId === principal.principalId,
+          appraiserRating: row.appraiserRating,
+          matchesPlayed: row.matchesPlayed,
+          cumulativeRealizedProfit: row.cumulativeRealizedProfit,
+          tycoonTier: tycoonTier(row.cumulativeRealizedProfit),
+        }));
+        const nextOffset =
+          parsedOffset + parsedLimit < page.total ? parsedOffset + parsedLimit : null;
+        return reply.send({ entries, total: page.total, nextOffset });
+      } catch (err) {
+        request.log.error({ err: err instanceof Error ? err.message : String(err) }, "leaderboard query failed");
+        return reply.code(503).send({ error: "TEMPORARY_STORAGE_FAILURE" });
+      }
+    });
+  } else {
+    // Flag off: the surface is entirely absent, not merely disabled.
+    app.all("/api/v1/auth/oauth/start", async (_request, reply) =>
+      reply.code(404).send({ error: "MATCH_NOT_FOUND_OR_FORBIDDEN" }),
+    );
+    app.all("/api/v1/auth/oauth/callback", async (_request, reply) =>
+      reply.code(404).send({ error: "MATCH_NOT_FOUND_OR_FORBIDDEN" }),
+    );
+    app.get("/api/v1/me", async (_request, reply) =>
+      reply.code(404).send({ error: "MATCH_NOT_FOUND_OR_FORBIDDEN" }),
+    );
+    app.get("/api/v1/leaderboard", async (_request, reply) =>
+      reply.code(404).send({ error: "MATCH_NOT_FOUND_OR_FORBIDDEN" }),
+    );
+  }
 
   app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
     // Status-coded errors (e.g. the 429 raised by @fastify/rate-limit) keep

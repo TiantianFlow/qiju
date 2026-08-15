@@ -138,6 +138,8 @@ describe("fail-open completion boundary", () => {
         throw new Error("simulated database failure");
       },
       careerForUser: async () => ({ ...ZERO_CAREER }),
+      leaderboardPage: async () => ({ rows: [], total: 0 }),
+      snapshotExists: async () => false,
     };
     const logError = vi.fn();
     // Must not throw synchronously…
@@ -153,6 +155,8 @@ describe("fail-open completion boundary", () => {
         throw new Error("sync blowup");
       },
       careerForUser: async () => ({ ...ZERO_CAREER }),
+      leaderboardPage: async () => ({ rows: [], total: 0 }),
+      snapshotExists: async () => false,
     };
     const logError = vi.fn();
     expect(() => persistMatchCompletionFailOpen(store, INPUT, logError)).not.toThrow();
@@ -167,11 +171,40 @@ describe("fail-open completion boundary", () => {
         calls.push(input);
       },
       careerForUser: async () => ({ ...ZERO_CAREER }),
+      leaderboardPage: async () => ({ rows: [], total: 0 }),
+      snapshotExists: async () => false,
     };
     const logError = vi.fn();
     persistMatchCompletionFailOpen(store, INPUT, logError);
     await new Promise((resolve) => setImmediate(resolve));
     expect(calls).toHaveLength(1);
     expect(logError).not.toHaveBeenCalled();
+  });
+
+  it("THE-44: a THROWING log sink cannot produce an unhandled rejection", async () => {
+    const store: MatchPersistenceStore = {
+      insertMatch: async () => {
+        throw new Error("simulated database failure");
+      },
+      careerForUser: async () => ({ ...ZERO_CAREER }),
+      leaderboardPage: async () => ({ rows: [], total: 0 }),
+      snapshotExists: async () => false,
+    };
+    const logError = vi.fn(() => {
+      throw new Error("simulated logger blowup");
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      expect(() => persistMatchCompletionFailOpen(store, INPUT, logError)).not.toThrow();
+      // Flush microtasks AND macrotasks so any unhandled rejection would fire.
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(logError).toHaveBeenCalledWith("simulated database failure");
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 });

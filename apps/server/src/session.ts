@@ -75,8 +75,16 @@ export function decodeSessionCookie(raw: string): SessionTokens | null {
 function isTransientError(error: unknown): boolean {
   if (error == null || typeof error !== "object") return false;
   const err = error as { status?: number; name?: string; code?: string; message?: string };
-  // Conclusive HTTP rejections (bad token, revoked refresh) arrive as 4xx.
   if (typeof err.status === "number") {
+    // THE-42: only GENUINELY credential-invalidating statuses are
+    // definitive. 408 (request timeout) and 429 (rate limited) say nothing
+    // about credential validity — classifying them as definitive let a
+    // rate-limited refresh be treated as a dead identity, after which
+    // requirePrincipal minted a replacement and silently detached the
+    // player from their career. They stay transient: preserve the cookie,
+    // fail closed with 503.
+    if (err.status === 408 || err.status === 429) return true;
+    // Conclusive HTTP rejections (bad token, revoked refresh) arrive as 4xx.
     if (err.status >= 400 && err.status < 500) return false;
     return true; // 5xx and anything else HTTP-shaped is inconclusive
   }

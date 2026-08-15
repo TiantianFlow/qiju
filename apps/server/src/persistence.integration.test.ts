@@ -296,6 +296,12 @@ describe("THE-37b match persistence and career", () => {
       careerForUser: async () => {
         throw new Error("fault-injected: database down");
       },
+      leaderboardPage: async () => {
+        throw new Error("fault-injected: database down");
+      },
+      snapshotExists: async () => {
+        throw new Error("fault-injected: database down");
+      },
     });
     const PORT3 = 4392;
     let faulted: FastifyInstance;

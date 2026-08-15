@@ -269,6 +269,25 @@ describe("THE-39 migration: conversion snapshot, leaderboard RPC, atomic writes"
       [user],
     );
     expect(Number(snapsAfter[0]!.c)).toBe(1);
+
+    // A literal second true->false transition (auth shouldn't produce one,
+    // but the trigger must be idempotent if it ever does): the WHEN clause
+    // is satisfied again, the insert runs, and ON CONFLICT (user_id) DO
+    // NOTHING leaves exactly one snapshot with the ORIGINAL values.
+    const { rows: flipBack } = await q<{ is_anonymous: boolean }>(
+      `update auth.users set is_anonymous = true where id = $1 returning is_anonymous`,
+      [user],
+    );
+    expect(flipBack[0]!.is_anonymous).toBe(true); // false->true never fires
+    await q(`update auth.users set is_anonymous = false where id = $1`, [user]);
+    const { rows: snapsFinal } = await q(
+      `select matches_played, cumulative_realized_profit, converted_at from public.account_conversion_snapshots where user_id = $1`,
+      [user],
+    );
+    expect(snapsFinal).toHaveLength(1);
+    expect(Number(snapsFinal[0]!.matches_played)).toBe(3);
+    expect(Number(snapsFinal[0]!.cumulative_realized_profit)).toBeCloseTo(referenceProfit(matches), 6);
+    expect(snapsFinal[0]!.converted_at).toEqual(snap.converted_at); // original, not overwritten
   });
 
   it("M2: a converting guest with zero career rows still gets a snapshot with zeroed aggregates and null time/rank fields", async () => {
@@ -324,35 +343,30 @@ describe("THE-39 migration: conversion snapshot, leaderboard RPC, atomic writes"
     expect(Number(rows[0]!.c)).toBe(0);
   });
 
-  it("M5: the snapshot write FAILS CLOSED — a snapshot failure aborts the conversion transaction and is_anonymous stays true", async () => {
+  it("M5: the snapshot write FAILS CLOSED — a real failure of the snapshot INSERT itself aborts the conversion and is_anonymous stays true", async () => {
     const user = await createUser(true);
     cleanupUsers.push(user);
-    // Simulate the audit path being broken: make the snapshot table
-    // unwritable by dropping its PK's guarantee — concretely, revoke the
-    // trigger function owner's ability to read match_seats by inserting a
-    // NOT NULL violation source: rename the table out from under the
-    // function within the same transaction would be DDL; instead inject a
-    // failing auxiliary trigger that raises, standing in for any snapshot
-    // write error. This proves errors propagate and roll back the UPDATE.
+    // Break the snapshot INSERT itself (not a sibling trigger): a BEFORE
+    // INSERT trigger on the snapshot table raises, so the trigger
+    // function's own INSERT is what fails — the real failure path.
     await q(`
       create or replace function public.the39_test_fail_snapshot() returns trigger
       language plpgsql security definer set search_path = '' as $f$
       begin
-        raise exception 'injected snapshot failure';
+        raise exception 'injected snapshot insert failure';
       end;
       $f$;
     `);
     await q(`
       create trigger the39_test_fail_snapshot_trg
-        after update of is_anonymous on auth.users
+        before insert on public.account_conversion_snapshots
         for each row
-        when (old.is_anonymous is true and new.is_anonymous is false)
         execute function public.the39_test_fail_snapshot();
     `);
     try {
       await expect(
         q(`update auth.users set is_anonymous = false where id = $1`, [user]),
-      ).rejects.toThrow(/(injected snapshot failure|account_conversion_snapshots)/);
+      ).rejects.toThrow(/injected snapshot insert failure/);
       // Rolled back: the user is still anonymous and no snapshot exists.
       const { rows: u } = await q<{ is_anonymous: boolean }>(
         `select is_anonymous from auth.users where id = $1`,
@@ -365,7 +379,9 @@ describe("THE-39 migration: conversion snapshot, leaderboard RPC, atomic writes"
       );
       expect(Number(s[0]!.c)).toBe(0);
     } finally {
-      await q(`drop trigger if exists the39_test_fail_snapshot_trg on auth.users`);
+      await q(
+        `drop trigger if exists the39_test_fail_snapshot_trg on public.account_conversion_snapshots`,
+      );
       await q(`drop function if exists public.the39_test_fail_snapshot()`);
     }
   });
@@ -617,17 +633,23 @@ describe("THE-39 migration: conversion snapshot, leaderboard RPC, atomic writes"
        where n.nspname = 'public'
          and p.proname in ('leaderboard_page_v1', 'record_match_completion_v1', 'capture_account_conversion_snapshot')`,
     );
-    const byName = Object.fromEntries(rows.map((r) => [r.proname, r.acl ?? []]));
+    const byName = Object.fromEntries(rows.map((r) => [r.proname, r.acl]));
     for (const name of ["leaderboard_page_v1", "record_match_completion_v1", "capture_account_conversion_snapshot"]) {
-      const acl = byName[name]!;
-      // No PUBLIC execute (proacl null would mean default PUBLIC EXECUTE;
-      // the migration revokes explicitly so an ACL row must exist).
-      expect(acl.some((e) => e.startsWith("=X"))).toBe(false);
-      expect(acl.some((e) => e.startsWith("anon="))).toBe(false);
-      expect(acl.some((e) => e.startsWith("authenticated="))).toBe(false);
+      const acl = byName[name];
+      // proacl NULL means the DEFAULT privileges apply — PUBLIC EXECUTE
+      // included. Every function in this migration revokes that, so a null
+      // ACL is itself a failure: a removed revoke would otherwise pass the
+      // itemized checks below while silently restoring PUBLIC EXECUTE.
+      expect(acl, `${name} must have an explicit ACL (null means default PUBLIC EXECUTE)`).not.toBeNull();
+      const entries = acl!;
+      // No PUBLIC execute, and nothing for the publishable-key roles.
+      expect(entries.some((e) => e.startsWith("="))).toBe(false);
+      expect(entries.some((e) => e.startsWith("anon="))).toBe(false);
+      expect(entries.some((e) => e.startsWith("authenticated="))).toBe(false);
     }
-    expect(byName["leaderboard_page_v1"]!.some((e) => e.startsWith("service_role=X"))).toBe(true);
-    expect(byName["record_match_completion_v1"]!.some((e) => e.startsWith("service_role=X"))).toBe(true);
+    const aclOf = (n: string) => byName[n]!;
+    expect(aclOf("leaderboard_page_v1").some((e) => e.startsWith("service_role=X"))).toBe(true);
+    expect(aclOf("record_match_completion_v1").some((e) => e.startsWith("service_role=X"))).toBe(true);
 
     // Defence in depth, runtime level: as anon the RPC is not callable.
     // (ACL assertions above are the primary check; pg has no cheap way to
@@ -659,5 +681,54 @@ describe("THE-39 migration: conversion snapshot, leaderboard RPC, atomic writes"
     expect(fn[0]!.prosecdef).toBe(true);
     // proconfig renders the blank pinned path as 'search_path=""'.
     expect(fn[0]!.config).toContain('search_path=""');
+  });
+
+  it("M13: the K-boundary one-human-seat-per-match assumption is pinned — a second human seat in one match visibly advances match_number twice", async () => {
+    // The rating SQL advances the K boundary per human seat ROW. Today's
+    // modes have exactly one human seat per match, so row order coincides
+    // with match order. This test PINS that assumption: if a future
+    // multi-human mode ever persists a second human seat per match, this
+    // test's explicit demonstration is the documentation that the formula
+    // (and packages/ranking parity) must be revisited — see the LATENT
+    // ASSUMPTION comments in the migration.
+    const user = await createUser(false);
+    cleanupUsers.push(user);
+    // 20 matches with utility +0.25 (K=32 each under per-match counting),
+    // then match 21 carries TWO human seat rows for the same user at
+    // utility -0.5. Per-match counting would apply K=16 once; per-row
+    // counting (today's implementation) applies K=16 to BOTH rows.
+    for (let i = 0; i < 20; i++) {
+      const matchId = mid(`m13-${i}`);
+      cleanupMatches.push(matchId);
+      await insertMatch(matchId, new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString(), [
+        humanSeat("seat1", user, 0.25, 100),
+        agentSeat("seat2", 0, 0),
+        agentSeat("seat3", 0, 0),
+        agentSeat("seat4", 0, 0),
+      ]);
+    }
+    const doubleSeatMatch = mid("m13-double");
+    cleanupMatches.push(doubleSeatMatch);
+    await insertMatch(doubleSeatMatch, new Date(Date.UTC(2026, 0, 1, 1, 0)).toISOString(), [
+      humanSeat("seat1", user, -0.5, 100),
+      humanSeat("seat2", user, -0.5, 100), // second human seat: hypothetical multi-human mode
+      agentSeat("seat3", 0, 0),
+      agentSeat("seat4", 0, 0),
+    ]);
+
+    const { rows } = await q<{ appraiser_rating: number; matches_played: string }>(
+      `select appraiser_rating, matches_played from public.leaderboard_page_v1(0, 100) where user_id = $1`,
+      [user],
+    );
+    expect(rows).toHaveLength(1);
+    // Per-row counting: 1000 + 20*32*0.25 + 2*16*(-0.5) = 1144.
+    // Per-match counting would give 1000 + 20*32*0.25 + 16*(-0.5) = 1152.
+    // Today's implementation produces 1144 — if a future schema change
+    // makes this test fail with 1152 (or anything else), the boundary
+    // semantics changed and the packages/ranking contract MUST be
+    // re-negotiated, not silently reinterpreted.
+    expect(rows[0]!.appraiser_rating).toBeCloseTo(1144, 9);
+    // matches_played counts DISTINCT matches even with two seat rows.
+    expect(Number(rows[0]!.matches_played)).toBe(21);
   });
 });
