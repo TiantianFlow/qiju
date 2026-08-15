@@ -73,11 +73,24 @@ export const ZERO_CAREER: CareerAggregates = {
  * prove fail-open); production and integration tests use the real Supabase
  * store built on the secret key.
  */
+export interface LeaderboardRow {
+  userId: string;
+  matchesPlayed: number;
+  cumulativeRealizedProfit: number;
+  appraiserRating: number;
+  rank: number;
+  total: number;
+}
+
 export interface MatchPersistenceStore {
   /** Insert the match + seat rows idempotently; throw on failure — callers must swallow. */
   insertMatch(input: PersistedMatchInput): Promise<void>;
   /** Aggregate the caller's own human-seat rows; zeroed aggregates when none. */
   careerForUser(userId: string): Promise<CareerAggregates>;
+  /** THE-39: one page of the leaderboard via the service-role-only RPC. */
+  leaderboardPage(offset: number, limit: number): Promise<{ rows: LeaderboardRow[]; total: number }>;
+  /** THE-39: does the conversion snapshot exist for this user? (fail-closed contract) */
+  snapshotExists(userId: string): Promise<boolean>;
 }
 
 /** Overridable seam for fault injection in tests; default is the real factory. */
@@ -99,42 +112,35 @@ export const persistenceDeps: {
 export function createSupabaseStore(client: SupabaseClient): MatchPersistenceStore {
   return {
     async insertMatch(input) {
-      // First completion wins: DO NOTHING when the deterministic id already
-      // exists. PostgREST's on_conflict upsert with Prefer: resolution=ignore
-      // is exactly that; a replayed seed returns 201 with no row change.
-      const { error: matchError } = await client
-        .from("matches")
-        .upsert(
-          {
-            match_id: input.matchId,
-            mode: input.mode,
-            seed: input.seed,
-            rule_bundle_id: input.ruleBundleId,
-            rule_manifest_hash: input.ruleManifestHash,
-            content_hash: input.contentHash,
-            final_state_hash: input.finalStateHash,
-          },
-          { onConflict: "match_id", ignoreDuplicates: true },
-        );
-      if (matchError) throw new Error(`matches insert failed: ${matchError.message}`);
-      const { error: seatsError } = await client
-        .from("match_seats")
-        .upsert(
-          input.seats.map((s) => ({
-            match_id: input.matchId,
-            seat_id: s.seatId,
-            controller_kind: s.controllerKind,
-            user_id: s.userId,
-            final_wealth: s.finalWealth,
-            realized_profit: s.realizedProfit,
-            bonus_reward: s.bonusReward,
-            dense_economic_rank: s.denseEconomicRank,
-            utility_numerator: s.utilityNumerator,
-            utility_denominator: s.utilityDenominator,
-          })),
-          { onConflict: "match_id,seat_id", ignoreDuplicates: true },
-        );
-      if (seatsError) throw new Error(`match_seats insert failed: ${seatsError.message}`);
+      // THE-43: match row + all seat rows are ONE transaction via the
+      // record_match_completion_v1 RPC. The old path upserted the match and
+      // the seats as two independent statements, so "first completion wins"
+      // was not guaranteed: a delayed continuation between the two writes
+      // let a second finisher's seat rows land first, crediting them with
+      // the first finisher's match metadata. First completion wins is
+      // preserved by the RPC's ON CONFLICT DO NOTHING clauses — a replayed
+      // deterministic id is a complete no-op, match and seats together.
+      const { error } = await client.rpc("record_match_completion_v1", {
+        p_match_id: input.matchId,
+        p_mode: input.mode,
+        p_seed: input.seed,
+        p_rule_bundle_id: input.ruleBundleId,
+        p_rule_manifest_hash: input.ruleManifestHash,
+        p_content_hash: input.contentHash,
+        p_final_state_hash: input.finalStateHash,
+        p_seats: input.seats.map((s) => ({
+          seat_id: s.seatId,
+          controller_kind: s.controllerKind,
+          user_id: s.userId,
+          final_wealth: s.finalWealth,
+          realized_profit: s.realizedProfit,
+          bonus_reward: s.bonusReward,
+          dense_economic_rank: s.denseEconomicRank,
+          utility_numerator: s.utilityNumerator,
+          utility_denominator: s.utilityDenominator,
+        })),
+      });
+      if (error) throw new Error(`match completion record failed: ${error.message}`);
     },
 
     async careerForUser(userId) {
@@ -164,6 +170,43 @@ export function createSupabaseStore(client: SupabaseClient): MatchPersistenceSto
         bestDenseEconomicRank: Math.min(...rows.map((r) => r.dense_economic_rank)),
         averageFinalWealth: totalFinalWealth / rows.length,
       };
+    },
+
+    async leaderboardPage(offset, limit) {
+      const { data, error } = await client.rpc("leaderboard_page_v1", {
+        p_offset: offset,
+        p_limit: limit,
+      });
+      if (error) throw new Error(`leaderboard query failed: ${error.message}`);
+      const num = (v: number | string): number => (typeof v === "string" ? Number(v) : v);
+      const rows = (data ?? []) as Array<{
+        user_id: string;
+        matches_played: number | string;
+        cumulative_realized_profit: number | string;
+        appraiser_rating: number;
+        rank: number | string;
+        total: number | string;
+      }>;
+      return {
+        rows: rows.map((r) => ({
+          userId: r.user_id,
+          matchesPlayed: num(r.matches_played),
+          cumulativeRealizedProfit: num(r.cumulative_realized_profit),
+          appraiserRating: r.appraiser_rating,
+          rank: num(r.rank),
+          total: num(r.total),
+        })),
+        total: rows.length > 0 ? num(rows[0]!.total) : 0,
+      };
+    },
+
+    async snapshotExists(userId) {
+      const { count, error } = await client
+        .from("account_conversion_snapshots")
+        .select("user_id", { count: "exact", head: true })
+        .eq("user_id", userId);
+      if (error) throw new Error(`snapshot query failed: ${error.message}`);
+      return (count ?? 0) > 0;
     },
   };
 }
@@ -225,6 +268,15 @@ export function persistMatchCompletionFailOpen(
   Promise.resolve()
     .then(() => store.insertMatch(input))
     .catch((err: unknown) => {
-      logError(err instanceof Error ? err.message : String(err));
+      // THE-44: the log SINK is inside the fail-open contract too. If it
+      // throws, the throw escapes this .catch callback and the derived
+      // promise rejects unobserved — an unhandled rejection off the back of
+      // a correctly-swallowed database error. Swallow sink failures: a
+      // broken logger must not break the match.
+      try {
+        logError(err instanceof Error ? err.message : String(err));
+      } catch {
+        /* fail-open applies to the sink as well */
+      }
     });
 }

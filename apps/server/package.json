@@ -21,6 +21,7 @@
     "@qiju/content-demo": "workspace:*",
     "@qiju/contracts": "workspace:*",
     "@qiju/game-core": "workspace:*",
+    "@qiju/ranking": "workspace:*",
     "@qiju/replay": "workspace:*",
     "@qiju/rules-demo": "workspace:*",
     "@qiju/session-runtime": "workspace:*",
@@ -31,6 +32,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "pg": "^8.13.1",
     "@types/ws": "^8.18.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

@@ -118,6 +118,31 @@ describe("verifyTokens failure taxonomy", () => {
     expect(await verifyTokens(client, tokens)).toEqual({ kind: "transient" });
   });
 
+  // THE-42 regression: a 429 (or 408) during refresh is NOT proof the
+  // credential is dead. The old taxonomy treated every 4xx as definitive,
+  // so a rate-limited refresh read as "invalid", requirePrincipal minted a
+  // replacement identity, and the player silently lost their career.
+  it.each([429, 408])(
+    "THE-42: a %i refresh rejection is transient — never mints, never invalidates",
+    async (status) => {
+      const client = fakeVerifyClient({
+        getClaims: async () => ({ data: null, error: { status: 401, message: "token expired" } }),
+        refreshSession: async () => ({
+          data: { session: null },
+          error: { status, message: status === 429 ? "rate limit exceeded" : "request timeout" },
+        }),
+      });
+      expect(await verifyTokens(client, tokens)).toEqual({ kind: "transient" });
+    },
+  );
+
+  it("THE-42: a 429 from getClaims itself is transient, not definitive", async () => {
+    const client = fakeVerifyClient({
+      getClaims: async () => ({ data: null, error: { status: 429, message: "rate limit" } }),
+    });
+    expect(await verifyTokens(client, tokens)).toEqual({ kind: "transient" });
+  });
+
   it("single-flight: concurrent refreshes share one call and the map drains on settle", async () => {
     let refreshCalls = 0;
     const client = fakeVerifyClient({

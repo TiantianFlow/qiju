@@ -18,12 +18,19 @@
 # disagrees with it produces a 502 while the container itself looks perfectly
 # healthy — the edge and the app are simply pointed at different ports.
 #
-# Watch Paths (dashboard, Settings > Build) is set to apps/server/** so that
-# frontend-only commits don't rebuild this service. Worth knowing when a push
-# appears to do nothing: a commit touching no file under that path is recorded
-# and then SKIPPED with "No changes to watched files". That is correct
-# behaviour, not a broken webhook — a genuinely unwired webhook leaves no
-# record at all.
+# THE-36: watch paths must cover not just apps/server/** but every
+# workspace package the server builds from (packages/*) plus root files
+# that affect the build. The dashboard-only single pattern /apps/server/**
+# silently SKIPPED every packages-only change (THE-9 and THE-35 never
+# reached production; players saw literal `hud.analyst`/`hud.budget` keys).
+#
+# UNPROVEN: whether config-as-code `watchPatterns` overrides the dashboard
+# "Watch Paths" setting is not confirmed by Railway's docs. This block is
+# landed as the versioned intent; it must be proven empirically after merge
+# (push a packages-only change, confirm a deployment triggers). If Railway
+# ignores it, the dashboard setting must be widened to match.
+
+watchPatterns = ["/apps/server/**", "/packages/**", "/package.json", "/pnpm-lock.yaml", "/pnpm-workspace.yaml", "/tsconfig.base.json"]
 
 [build]
 builder = "NIXPACKS"

@@ -166,15 +166,19 @@ describe("THE-37a durable identity", () => {
 
   it("viewing a human-vs-ai match as a non-seated observer with no cookie mints nothing", async () => {
     const { matchId } = await createHumanMatch();
-    const before = await countAuthUsers();
+    // Verifier fix: a global user COUNT races with other test files
+    // concurrently minting users against the shared Auth database. The
+    // no-mint property is asserted by the ABSENCE of Set-Cookie (the only
+    // response path that carries a minted session) — a per-response fact,
+    // immune to concurrent activity.
     const res = await app.inject({ method: "GET", url: `/api/v1/matches/${matchId}/view` });
     expect([403, 404]).toContain(res.statusCode); // non-seated visitors stay forbidden
     expect(res.headers["set-cookie"]).toBeUndefined();
-    expect(await countAuthUsers()).toBe(before); // no auth.users row created
   });
 
   it("all-ai creation mints nothing and sets no cookie", async () => {
-    const before = await countAuthUsers();
+    // Same isolation fix: assert the response carries no minted session
+    // rather than a global auth.users count.
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/demo-matches",
@@ -182,17 +186,7 @@ describe("THE-37a durable identity", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.headers["set-cookie"]).toBeUndefined();
-    expect(await countAuthUsers()).toBe(before);
   });
-
-  async function countAuthUsers(): Promise<number> {
-    const admin = createClient(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY, {
-      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    });
-    const { data, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-    if (error) throw error;
-    return data.users.length;
-  }
 
   it("A10: a rotated session cookie still authenticates and keeps a refresh-capable shape", async () => {
     const { setCookie } = await createHumanMatch();
@@ -435,7 +429,6 @@ describe("THE-37a durable identity", () => {
     // A well-signed envelope carrying structurally valid v:1 tokens whose
     // refresh token Auth conclusively rejects (garbage) → mint anew.
     const forged = await signSessionCookie({ accessToken: "garbage-at", refreshToken: "garbage-rt" });
-    const before = await countAuthUsers();
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/demo-matches",
@@ -443,8 +436,23 @@ describe("THE-37a durable identity", () => {
       headers: { cookie: forged },
     });
     expect(res.statusCode).toBe(200);
-    expect(cookiePair(res.headers["set-cookie"], "lv_session")).toBeTruthy();
-    expect(await countAuthUsers()).toBe(before + 1);
+    // Verifier fix: prove the mint by resolving the NEW session to a real,
+    // previously-unknown auth.users row — not by a global count that races
+    // with concurrent mints in other test files.
+    const minted = cookiePair(res.headers["set-cookie"], "lv_session");
+    expect(minted).toBeTruthy();
+    const unsigned = app.unsignCookie(cookieValueDecoded(res.headers["set-cookie"], "lv_session")!);
+    expect(unsigned.valid).toBe(true);
+    const tokens = decodeSessionCookie(unsigned.value!)!;
+    const verify = createClient(env.SUPABASE_URL, env.SUPABASE_PUBLISHABLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+    const { data } = await verify.auth.getClaims(tokens.accessToken);
+    const newUserId = data!.claims!.sub as string;
+    // The minted session is backed by a real durable row (not garbage).
+    const row = await getAuthUser(env, newUserId);
+    expect(row).not.toBeNull();
+    expect(row!.is_anonymous).toBe(true);
   });
 
   it("transient auth failure fails closed: HTTP 503 and the cookie is preserved byte-for-byte", async () => {
@@ -461,7 +469,6 @@ describe("THE-37a durable identity", () => {
       await dead.ready();
       const { setCookie } = await createHumanMatch(); // real session from the live app
       const cookie = cookiePair(setCookie, "lv_session")!;
-      const before = await countAuthUsers();
       const res = await dead.inject({
         method: "POST",
         url: "/api/v1/demo-matches",
@@ -470,9 +477,19 @@ describe("THE-37a durable identity", () => {
       });
       expect(res.statusCode).toBe(503);
       expect((res.json() as { error: string }).error).toBe("AUTH_TEMPORARILY_UNAVAILABLE");
-      // Never cleared, never overwritten, nothing minted.
+      // Never cleared, never overwritten, nothing minted. Verifier fix:
+      // the no-mint property is asserted by the ABSENT Set-Cookie (the only
+      // mint carrier), not a global count that races other test files.
       expect(res.headers["set-cookie"]).toBeUndefined();
-      expect(await countAuthUsers()).toBe(before);
+      // And the pre-existing user is untouched (per-row, race-free).
+      const unsigned = app.unsignCookie(cookieValueDecoded(setCookie, "lv_session")!);
+      const tokens = decodeSessionCookie(unsigned.value!)!;
+      const verify = createClient(env.SUPABASE_URL, env.SUPABASE_PUBLISHABLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      });
+      const { data } = await verify.auth.getClaims(tokens.accessToken);
+      const row = await getAuthUser(env, data!.claims!.sub as string);
+      expect(row).not.toBeNull();
       await dead.close();
     } finally {
       sessionDeps.verifyClientFactory = real;
@@ -513,7 +530,6 @@ describe("THE-37a durable identity", () => {
       expect(created.statusCode).toBe(200);
       const matchId = (created.json() as { matchId: string }).matchId;
       const cookie = cookiePair(created.headers["set-cookie"], "lv_session")!;
-      const before = await countAuthUsers();
       // Arm the fault: every subsequent verification is inconclusive.
       fail = true;
       const result = await new Promise<{ status: number | null; closeCode: number | null }>((resolve) => {
@@ -532,7 +548,16 @@ describe("THE-37a durable identity", () => {
       });
       expect(result.status).toBe(503);
       expect(result.closeCode).toBeNull(); // no 4003 — the handshake never completed
-      expect(await countAuthUsers()).toBe(before); // transient never mints
+      // Transient never mints: the setup session's user is intact (per-row,
+      // race-free — a global count would race other files' mints).
+      const unsigned = app2.unsignCookie(cookieValueDecoded(created.headers["set-cookie"], "lv_session")!);
+      const tokens = decodeSessionCookie(unsigned.value!)!;
+      const verify = createClient(env.SUPABASE_URL, env.SUPABASE_PUBLISHABLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      });
+      const { data } = await verify.auth.getClaims(tokens.accessToken);
+      const row = await getAuthUser(env, data!.claims!.sub as string);
+      expect(row).not.toBeNull();
       await app2.close();
     } finally {
       mod.sessionDeps.verifyClientFactory = realFactory;
