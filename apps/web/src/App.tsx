@@ -1,14 +1,18 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { CatalogItem, Locale, Strings } from "./types";
 import { detectLocale, t } from "./i18n";
 import { API_BASE_URL, withApiCredentials } from "./config";
 import { MatchConnection } from "./connection";
 import { useConnection } from "./hooks";
+import { consumeAuthOutcome, fetchMe, type AuthOutcome, type MeResponse } from "./auth";
+import { withAccountStrings } from "./accountStrings";
 import { HomePage } from "./pages/Home";
 import { SetupPage } from "./pages/Setup";
 import { TablePage } from "./pages/Table";
 import { ResultPage } from "./pages/Result";
 import { DemoControls } from "./pages/DemoControls";
+import { AccountPage } from "./pages/Account";
+import { LeaderboardPage } from "./pages/Leaderboard";
 
 interface ActiveMatch {
   matchId: string;
@@ -16,9 +20,31 @@ interface ActiveMatch {
   seed: string;
 }
 
+/** Static pages reachable via path, in addition to the in-memory match flow. */
+type StaticRoute = "home" | "account" | "leaderboard";
+
+function routeFromPath(pathname: string): StaticRoute {
+  if (pathname === "/account") return "account";
+  if (pathname === "/leaderboard") return "leaderboard";
+  return "home";
+}
+
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/**
+ * Display-identity guard (THE-39 design, binding): the UI must never render
+ * a raw auth UUID. A malformed server playerLabel is dropped, not shown.
+ */
+function sanitizeMe(me: MeResponse | null): MeResponse | null {
+  if (me && me.playerLabel !== null && UUID_RE.test(me.playerLabel)) {
+    return { principal: me.principal, playerLabel: null };
+  }
+  return me;
+}
+
 export function App() {
   const [locale, setLocale] = useState<Locale>(() => detectLocale());
-  const [strings, setStrings] = useState<Strings>({});
+  const [serverStrings, setServerStrings] = useState<Strings>({});
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [productName, setProductName] = useState({ "zh-CN": "奇局", en: "Qiju" });
   const [allowFixedSeed, setAllowFixedSeed] = useState(true);
@@ -27,6 +53,55 @@ export function App() {
     return stored ? (JSON.parse(stored) as ActiveMatch) : null;
   });
   const [connection, setConnection] = useState<MatchConnection | null>(null);
+
+  // THE-58: route + accounts state. `me` stays null while the feature is
+  // dark (404) — every account surface degrades on that.
+  const [route, setRoute] = useState<StaticRoute>(() =>
+    routeFromPath(window.location.pathname),
+  );
+  const [authOutcome, setAuthOutcome] = useState<AuthOutcome | null>(null);
+  const [me, setMe] = useState<MeResponse | null>(null);
+  const [leaderboardOffset, setLeaderboardOffset] = useState(0);
+
+  const refreshMe = useCallback(async () => {
+    setMe(sanitizeMe(await fetchMe()));
+  }, []);
+
+  // One-shot auth= outcome from the OAuth callback's 303; strip it from the
+  // address bar immediately so a refresh can't replay it.
+  useEffect(() => {
+    const { outcome, cleanUrl } = consumeAuthOutcome(
+      window.location.search,
+      window.location.pathname,
+    );
+    if (cleanUrl !== `${window.location.pathname}${window.location.search}`) {
+      window.history.replaceState(null, "", cleanUrl);
+    }
+    setAuthOutcome(outcome);
+    void refreshMe();
+  }, [refreshMe]);
+
+  const navigate = useCallback(
+    (path: string) => {
+      setAuthOutcome(null);
+      setRoute(routeFromPath(path));
+      window.history.pushState(null, "", path);
+      if (path === "/account" || path === "/leaderboard") void refreshMe();
+      window.scrollTo(0, 0);
+    },
+    [refreshMe],
+  );
+
+  // Browser back/forward between the static pages.
+  useEffect(() => {
+    const onPop = () => {
+      setAuthOutcome(null);
+      setRoute(routeFromPath(window.location.pathname));
+      void refreshMe();
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [refreshMe]);
 
   useEffect(() => {
     void (async () => {
@@ -48,7 +123,7 @@ export function App() {
       );
       if (localeRes.ok) {
         const data = (await localeRes.json()) as { strings: Strings; catalog?: CatalogItem[] };
-        setStrings(data.strings);
+        setServerStrings(data.strings);
         setCatalog(data.catalog ?? []);
       }
     })();
@@ -71,13 +146,45 @@ export function App() {
   const goHome = () => {
     sessionStorage.removeItem("lv_match");
     setActive(null);
+    navigate("/");
   };
 
-  if (Object.keys(strings).length === 0) {
+  // Server content plus local THE-58 account strings; account keys never
+  // come from the server bundle (packages/** is outside this ticket).
+  const strings = withAccountStrings(serverStrings, locale);
+
+  if (Object.keys(serverStrings).length === 0) {
     return <p>{t(strings, "common.loading")}</p>;
   }
 
   if (!active || !connection) {
+    if (route === "account") {
+      return (
+        <div className="app-shell page-shell">
+          <AccountPage
+            strings={strings}
+            locale={locale}
+            me={me}
+            outcome={authOutcome}
+            onNavigate={navigate}
+            onOutcomeConsumed={() => setAuthOutcome(null)}
+          />
+        </div>
+      );
+    }
+    if (route === "leaderboard") {
+      return (
+        <div className="app-shell page-shell">
+          <LeaderboardPage
+            strings={strings}
+            locale={locale}
+            offset={leaderboardOffset}
+            onOffset={setLeaderboardOffset}
+            onNavigate={navigate}
+          />
+        </div>
+      );
+    }
     return (
       <div className="app-shell home-shell">
         <HomePage
@@ -87,6 +194,8 @@ export function App() {
           onCreated={(matchId, mode, seed) => setActive({ matchId, mode, seed })}
           allowFixedSeed={allowFixedSeed}
           productName={productName}
+          me={me}
+          onNavigate={navigate}
         />
       </div>
     );

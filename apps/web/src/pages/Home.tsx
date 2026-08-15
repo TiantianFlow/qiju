@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Locale, Strings } from "../types";
 import { persistLocale, t } from "../i18n";
 import { API_BASE_URL, withApiCredentials } from "../config";
+import type { MeResponse } from "../auth";
 
 export function HomePage({
   strings,
@@ -10,6 +11,8 @@ export function HomePage({
   onCreated,
   allowFixedSeed,
   productName,
+  me,
+  onNavigate,
 }: {
   strings: Strings;
   locale: Locale;
@@ -17,6 +20,8 @@ export function HomePage({
   onCreated: (matchId: string, mode: "human-vs-ai" | "all-ai", seed: string) => void;
   allowFixedSeed: boolean;
   productName: { "zh-CN": string; en: string };
+  me: MeResponse | null;
+  onNavigate: (path: string) => void;
 }) {
   const [seed, setSeed] = useState("");
   const [showSeed, setShowSeed] = useState(false);
@@ -90,6 +95,33 @@ export function HomePage({
           <option value="en">English</option>
         </select>
       </div>
+      {/*
+       * THE-58: account entry. Deliberately quiet while the feature is dark:
+       * /api/v1/me 404s, `me` stays null, and this row is hidden entirely —
+       * no dead buttons for a feature that is not on.
+       */}
+      {me ? (
+        <div className="account-row" data-testid="home-account-row">
+          <button
+            type="button"
+            className="link"
+            onClick={() => onNavigate("/account")}
+            data-testid="home-account-link"
+          >
+            {me.principal === "account"
+              ? `${t(strings, "account.title")} · ${me.playerLabel ?? ""}`
+              : t(strings, "account.signInGoogle")}
+          </button>
+          <button
+            type="button"
+            className="link"
+            onClick={() => onNavigate("/leaderboard")}
+            data-testid="home-leaderboard-link"
+          >
+            {t(strings, "leaderboard.title")}
+          </button>
+        </div>
+      ) : null}
       <p className="app-version" data-testid="app-version">v{__APP_VERSION__}</p>
     </main>
   );

@@ -18,9 +18,12 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1",
+    "@supabase/supabase-js": "2.112.2",
+    "@types/pg": "8.21.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "pg": "8.23.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.7"
   }

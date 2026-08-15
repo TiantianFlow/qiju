@@ -152,6 +152,257 @@ input, select {
   margin-top: 32px;
 }
 
+/* ------------------------------------------------------------------ */
+/* THE-58 — accounts + leaderboard                                     */
+/* ------------------------------------------------------------------ */
+
+.app-shell.page-shell {
+  overflow: auto;
+  padding: 16px;
+}
+
+/* Account row on the home page: low visual priority, same band as the
+   locale switch. Hidden entirely while the feature is dark. */
+.account-row {
+  margin: 16px 0 0;
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.page-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.page-bar h1 {
+  margin: 0;
+  font-size: 22px;
+  flex: 1 1 auto;
+  text-align: center;
+}
+
+.account,
+.leaderboard {
+  /*
+   * THE-58 geometry: width (not just max-width) + contain:inline-size so
+   * the column NEVER sizes to an overflowing child (the leaderboard table
+   * keeps min-width:560px and scrolls inside .leaderboard-scroll instead).
+   * Without containment a block child sizes to its widest overflowing
+   * descendant and the whole page scrolls horizontally at 390px — the
+   * THE-9 clipping class.
+   */
+  /*
+   * THE-58 geometry: width (not max-width) pins the column to its parent
+   * even when a descendant overflows (the leaderboard table keeps a
+   * 560px min-width and scrolls inside .leaderboard-scroll at narrow
+   * viewports). With only max-width the column sizes to the overflowing
+   * table and the whole page slides horizontally at 390px — the THE-9
+   * clipping class.
+   */
+  width: min(720px, 100%);
+  margin: 0 auto;
+}
+
+.auth-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: var(--panel);
+  border: 1px solid #3a4d6c;
+  border-left: 4px solid var(--accent-2);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.auth-notice p {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* conflict must reassure, not alarm: a neutral accent, not the danger
+   color — the player's guest progress is intact, this is not data loss. */
+.auth-outcome-conflict,
+.auth-outcome-failed,
+.auth-outcome-restart,
+.auth-outcome-expired {
+  border-left-color: var(--accent);
+}
+
+.auth-outcome-ok {
+  border-left-color: #5dbb8a;
+}
+
+.account-status,
+.account-career {
+  background: var(--panel);
+  border: 1px solid #2a3549;
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 16px;
+}
+
+.account-principal {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.account-label {
+  color: var(--muted);
+  margin: 0 0 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-signin {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.account-signin button {
+  background: var(--accent);
+  color: #1a1408;
+  border: none;
+  font-weight: 600;
+}
+
+.account-signin-hint {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+.career-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.career-grid dt {
+  color: var(--muted);
+}
+
+.career-grid dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.leaderboard-scroll {
+  /* The table keeps its min-width and scrolls horizontally inside this
+     bordered region at narrow viewports instead of clipping columns. */
+  overflow-x: auto;
+  border: 1px solid #2a3549;
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.leaderboard-table {
+  border-collapse: collapse;
+  width: 100%;
+  /* Six columns (zh-CN headers are the widest) never shrink to illegible
+     text at 390px; the wrapper scrolls instead. */
+  min-width: 560px;
+  font-size: 14px;
+}
+
+.leaderboard-table th,
+.leaderboard-table td {
+  border-bottom: 1px solid #2a3549;
+  padding: 8px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.leaderboard-table th {
+  color: var(--muted);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+}
+
+.leaderboard-table .col-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.leaderboard-table .col-rank {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.leaderboard-table tr.is-self td {
+  background: #2c3a52;
+}
+
+.leaderboard-table tr.is-self .col-player {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.self-badge {
+  margin-inline-start: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--accent);
+  color: #1a1408;
+}
+
+.leaderboard-pager {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.leaderboard-page-status {
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 480px) {
+  /*
+   * THE-58 geometry: at 390px the six leaderboard columns (rank, player,
+   * rating, matches, profit, tier — zh-CN headers are the widest) cannot
+   * keep the full table inside the viewport without illegibly tiny text;
+   * the table keeps a sane min-width and scrolls horizontally inside its
+   * own bordered region instead of breaking the page layout or clipping
+   * columns silently.
+   */
+  .page-bar h1 {
+    font-size: 18px;
+  }
+
+  .leaderboard-table {
+    font-size: 13px;
+  }
+
+  .leaderboard-table th,
+  .leaderboard-table td {
+    padding: 6px 8px;
+  }
+}
+
 .table-toolbar .app-version {
   margin-inline-start: auto;
 }
