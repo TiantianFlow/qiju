@@ -2,12 +2,16 @@ import { test, expect, type Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 import { createHmac } from "node:crypto";
 import pg from "pg";
+import { localSupabaseEnv } from "./localSupabaseEnv";
 
 /**
- * THE-58 flag-ON behavior. Requires a server built WITH FEATURE_ACCOUNTS=true
- * against real local Supabase (E2E_ACCOUNTS_ON=1) plus
- * SUPABASE_SECRET_KEY_E2E / SUPABASE_URL_E2E for account fixture setup;
- * otherwise the suite skips itself.
+ * THE-58 flag-ON behavior. Runs by DEFAULT in `pnpm test:e2e` against a
+ * Playwright-managed server built with FEATURE_ACCOUNTS=true on its own port
+ * (the "accounts-on" project in playwright.config.ts) — no opt-in env var.
+ * The Supabase env for fixture setup is resolved from the running LOCAL stack
+ * (`supabase status -o env`); the whole describe skips when no local stack is
+ * up, because there is no Auth to mint fixture accounts against. Override any
+ * piece via the *_E2E variables when pointing at a non-default stack.
  *
  * What is NOT exercised here: a real provider roundtrip (no Google
  * credentials locally, and local Supabase has no OAuth provider
@@ -18,14 +22,22 @@ import pg from "pg";
  * pagination, and layout geometry run against the REAL stack: account
  * fixtures are permanent auth.users created through the admin API, their
  * careers are real matches played through the UI or real persisted rows.
+ *
+ * Reach, stated precisely: `pnpm test:e2e` is NOT in CI yet (CI runs lint,
+ * build, typecheck and `pnpm test` only) — it becomes CI-gated when THE-21
+ * lands. Until then this suite is the LOCAL gate that makes the geometry
+ * assertions execute rather than skip.
  */
 
-const ON = process.env.E2E_ACCOUNTS_ON === "1";
-const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3001";
-const SUPABASE_URL = process.env.SUPABASE_URL_E2E ?? "http://127.0.0.1:54421";
-const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY_E2E ?? "";
-const DATABASE_URL = process.env.DATABASE_URL_E2E ?? "";
-const COOKIE_SECRET = process.env.COOKIE_SECRET_E2E ?? "";
+const LOCAL = localSupabaseEnv();
+// Runs when a stack is resolvable, whether from the local CLI or an explicit
+// SUPABASE_SECRET_KEY_E2E override; the project wires the baseURL + flag-on
+// server. Skip (not error) only when there is genuinely no Auth to use.
+const ON = Boolean(LOCAL || process.env.SUPABASE_SECRET_KEY_E2E);
+const SUPABASE_URL = process.env.SUPABASE_URL_E2E ?? LOCAL?.apiUrl ?? "http://127.0.0.1:54421";
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY_E2E ?? LOCAL?.secretKey ?? "";
+const DATABASE_URL = process.env.DATABASE_URL_E2E ?? LOCAL?.dbUrl ?? "";
+const COOKIE_SECRET = process.env.COOKIE_SECRET_E2E ?? "dev-only-insecure-secret-change-me";
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 800 },
@@ -118,6 +130,15 @@ async function createPermanentAccount(tag: string): Promise<AccountFixture> {
  * e2e server runs with (COOKIE_SECRET_E2E), which is exactly how the
  * browser "has" a session without a Google roundtrip.
  */
+/** The app's origin for this run (the project's baseURL, never a hardcoded port). */
+function appOrigin(page: Page): string {
+  const configured = (page.context() as unknown as { _options?: { baseURL?: string } })._options
+    ?.baseURL;
+  const base = configured ?? page.url();
+  const url = new URL(base === "about:blank" ? "http://localhost" : base);
+  return url.origin;
+}
+
 async function adoptSession(page: Page, fixture: AccountFixture) {
   if (!COOKIE_SECRET) throw new Error("COOKIE_SECRET_E2E required for the flag-on e2e");
   // Signing model, verified against the live server: Fastify's cookie
@@ -138,9 +159,10 @@ async function adoptSession(page: Page, fixture: AccountFixture) {
     .digest("base64")
     .replace(/=+$/, "");
   const wireValue = `${encodeURIComponent(hmacInput)}.${signature}`;
-  const hostname = new URL(BASE).hostname;
+  // `url` (not domain/path) so it works before any navigation, when
+  // page.url() is still about:blank.
   await page.context().addCookies([
-    { name: "lv_session", value: wireValue, domain: hostname, path: "/" },
+    { name: "lv_session", value: wireValue, url: appOrigin(page) },
   ]);
 }
 
@@ -214,11 +236,12 @@ async function expectLayoutGeometry(page: Page, note: string) {
 async function resetToHome(page: Page) {
   // After the sign-in start test the browser is stranded on a dead origin
   // (the provider URL cannot resolve locally) where storage is denied —
-  // navigate back to the app origin first.
-  if (page.url().startsWith(BASE)) {
+  // navigate back to the app origin (relative, so the project's baseURL)
+  // first.
+  if (page.url() !== "about:blank" && new URL(page.url()).origin === appOrigin(page)) {
     await page.evaluate(() => sessionStorage.removeItem("lv_match"));
   } else {
-    await page.goto(`${BASE}/`);
+    await page.goto("/");
     await page.evaluate(() => sessionStorage.removeItem("lv_match"));
   }
 }
@@ -325,7 +348,8 @@ test.describe("accounts + leaderboard (FEATURE_ACCOUNTS on)", () => {
     // wait for it explicitly rather than racing.
     await expect
       .poll(
-        async () => (await page.context().cookies(BASE)).some((c) => c.name === "lv_session"),
+        async () =>
+          (await page.context().cookies(appOrigin(page))).some((c) => c.name === "lv_session"),
         { timeout: 10_000 },
       )
       .toBe(true);
