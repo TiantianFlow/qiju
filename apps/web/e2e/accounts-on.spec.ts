@@ -436,6 +436,21 @@ test.describe("accounts + leaderboard (FEATURE_ACCOUNTS on)", () => {
           scrollBox!.x + scrollBox!.width,
           `scroll region inside ${viewport.width}px (got x=${scrollBox!.x} w=${scrollBox!.width})`,
         ).toBeLessThanOrEqual(viewport.width + 0.5);
+        // The page column itself must be pinned to the viewport: with only
+        // max-width it sizes to the overflowing 560px table and the pager /
+        // headers slide off-screen even though the scroll region (somehow)
+        // still reports inside bounds. This is the load-bearing assertion —
+        // falsification-tested by removing width:min(720px,100%).
+        const mainBox = await page.locator("main.leaderboard").boundingBox();
+        expect(
+          mainBox!.x + mainBox!.width,
+          `leaderboard column inside ${viewport.width}px (got x=${mainBox!.x} w=${mainBox!.width})`,
+        ).toBeLessThanOrEqual(viewport.width + 0.5);
+        const pagerBox = await page.getByTestId("leaderboard-pager").boundingBox();
+        expect(
+          pagerBox!.x + pagerBox!.width,
+          `pager inside ${viewport.width}px (got x=${pagerBox!.x} w=${pagerBox!.width})`,
+        ).toBeLessThanOrEqual(viewport.width + 0.5);
         // Headers in this locale are visible (i.e. the columns exist).
         for (const header of Object.values(locale.headers)) {
           await expect(page.getByRole("columnheader", { name: header })).toBeVisible();
@@ -457,6 +472,15 @@ test.describe("accounts + leaderboard (FEATURE_ACCOUNTS on)", () => {
         const box = await notice.boundingBox();
         expect(box!.x).toBeGreaterThanOrEqual(0);
         expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 0.5);
+        // Column-width assertion: the account page column must be pinned to
+        // the viewport, not sized by an overflowing descendant (the same
+        // THE-9 class as the leaderboard table; falsification-tested by
+        // removing width:min(720px,100%)).
+        const mainBox = await page.locator("main.account").boundingBox();
+        expect(
+          mainBox!.x + mainBox!.width,
+          `account column inside ${viewport.width}px (got x=${mainBox!.x} w=${mainBox!.width})`,
+        ).toBeLessThanOrEqual(viewport.width + 0.5);
         await expectLayoutGeometry(page, `${viewport.name}/${locale.code} account`);
         expect(errors).toEqual([]);
       });
