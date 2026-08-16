@@ -9,9 +9,11 @@ import { localSupabaseEnv } from "./localSupabaseEnv";
  * Playwright-managed server built with FEATURE_ACCOUNTS=true on its own port
  * (the "accounts-on" project in playwright.config.ts) — no opt-in env var.
  * The Supabase env for fixture setup is resolved from the running LOCAL stack
- * (`supabase status -o env`); the whole describe skips when no local stack is
- * up, because there is no Auth to mint fixture accounts against. Override any
- * piece via the *_E2E variables when pointing at a non-default stack.
+ * (`supabase status -o env`); if NO stack is reachable this file THROWS at
+ * load rather than skipping — a green e2e with the geometry gate absent is an
+ * unproven gate (the same failure mode as the old E2E_ACCOUNTS_ON opt-in,
+ * conditioned on infrastructure instead of a flag). Override any piece via
+ * the *_E2E variables when pointing at a non-default stack.
  *
  * What is NOT exercised here: a real provider roundtrip (no Google
  * credentials locally, and local Supabase has no OAuth provider
@@ -30,14 +32,27 @@ import { localSupabaseEnv } from "./localSupabaseEnv";
  */
 
 const LOCAL = localSupabaseEnv();
-// Runs when a stack is resolvable, whether from the local CLI or an explicit
-// SUPABASE_SECRET_KEY_E2E override; the project wires the baseURL + flag-on
-// server. Skip (not error) only when there is genuinely no Auth to use.
-const ON = Boolean(LOCAL || process.env.SUPABASE_SECRET_KEY_E2E);
 const SUPABASE_URL = process.env.SUPABASE_URL_E2E ?? LOCAL?.apiUrl ?? "http://127.0.0.1:54421";
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY_E2E ?? LOCAL?.secretKey ?? "";
 const DATABASE_URL = process.env.DATABASE_URL_E2E ?? LOCAL?.dbUrl ?? "";
 const COOKIE_SECRET = process.env.COOKIE_SECRET_E2E ?? "dev-only-insecure-secret-change-me";
+
+/**
+ * Fail loudly when no Supabase stack is reachable — do NOT skip. A green e2e
+ * with the geometry assertions absent is an unproven gate (the same failure
+ * mode as the E2E_ACCOUNTS_ON opt-in, now conditioned on infrastructure).
+ * Consistent with requireSupabaseEnv() in apps/server/src/test-helpers.ts.
+ * The accounts-on project's webServer cannot start without this env either,
+ * so skipping here would only hide an already-broken run.
+ */
+if (!SUPABASE_SECRET_KEY) {
+  throw new Error(
+    "accounts-on e2e requires a running local Supabase stack (run `supabase start` " +
+      "in the repo root); the geometry gate must not pass with zero coverage. " +
+      "Override with SUPABASE_SECRET_KEY_E2E / SUPABASE_URL_E2E / DATABASE_URL_E2E " +
+      "for a non-default stack.",
+  );
+}
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 800 },
@@ -256,10 +271,7 @@ async function seedPaginationBatch(admin: ReturnType<typeof adminClient>) {
 }
 
 test.describe("accounts + leaderboard (FEATURE_ACCOUNTS on)", () => {
-  test.skip(!ON, "requires the flag-on server (E2E_ACCOUNTS_ON=1)");
-
   test.beforeAll(async () => {
-    if (!ON) return;
     // One batch covers the pagination test (60 > page size 50). ~60
     // account creations are slow against local Auth; do them once.
     test.setTimeout(600_000);
