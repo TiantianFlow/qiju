@@ -1,0 +1,104 @@
+import type { Locale, Strings } from "./types";
+
+/**
+ * THE-58 — account/leaderboard strings live in apps/web, not the server
+ * content bundle: packages/** is outside this ticket's scope and the
+ * account surface must also render when the server content fetch fails.
+ * zh-CN is the default locale and its strings are the longer ones (the
+ * THE-9 clipping class) — layout is tested against these, not English.
+ */
+export const ACCOUNT_STRINGS: Record<Locale, Strings> = {
+  "zh-CN": {
+    "account.title": "账户",
+    "account.backHome": "返回首页",
+    "account.status.guest": "当前是游客身份",
+    "account.status.account": "已登录账户",
+    "account.status.none": "尚未创建身份",
+    "account.playerLabel": "显示名称：{label}",
+    "account.signInGoogle": "使用 Google 继续",
+    "account.signInHint.guest": "登录以保留游客进度并上榜。",
+    "account.signInHint.none": "登录以创建账户并上榜。",
+    "account.signInStartFailed": "暂时无法开始登录，请稍后重试。",
+    "account.auth.ok": "登录成功。",
+    "account.auth.cancelled": "登录已取消，未做任何更改。",
+    "account.auth.conflict":
+      "该登录已绑定到另一个账户。你的游客进度原样保留，请换一个账户或登录方式重试。",
+    "account.auth.expired": "登录流程已过期，请重试。",
+    "account.auth.restart": "登录未完成，请重试。",
+    "account.auth.failed": "登录失败，请重试。",
+    "account.career.title": "生涯战绩",
+    "account.career.matchesPlayed": "已比赛场次",
+    "account.career.totalRealizedProfit": "累计已实现利润",
+    "account.career.totalFinalWealth": "最终总资产合计",
+    "account.career.totalBonusReward": "过价奖励合计",
+    "account.career.unavailable": "暂时无法载入生涯数据，请稍后刷新。",
+    "account.career.guestHint": "登录以跨设备保留进度并进入排行榜。",
+    "account.leaderboardLink": "查看排行榜",
+    "leaderboard.title": "排行榜",
+    "leaderboard.backHome": "返回首页",
+    "leaderboard.accountLink": "我的账户",
+    "leaderboard.col.rank": "名次",
+    "leaderboard.col.player": "玩家",
+    "leaderboard.col.rating": "估值师评分",
+    "leaderboard.col.matches": "场次",
+    "leaderboard.col.profit": "累计利润",
+    "leaderboard.col.tier": "大亨段位",
+    "leaderboard.self": "我",
+    "leaderboard.prev": "上一页",
+    "leaderboard.next": "下一页",
+    "leaderboard.pageStatus": "第 {from}–{to} 名，共 {total} 人",
+    "leaderboard.unavailable": "排行榜暂不可用，请稍后刷新。",
+    "leaderboard.empty": "还没有上榜玩家。",
+    "leaderboard.refresh": "刷新",
+    "leaderboard.guestHint": "游客不上榜。登录以进入排行榜。",
+  },
+  en: {
+    "account.title": "Account",
+    "account.backHome": "Back to home",
+    "account.status.guest": "Playing as a guest",
+    "account.status.account": "Signed in",
+    "account.status.none": "No identity yet",
+    "account.playerLabel": "Display name: {label}",
+    "account.signInGoogle": "Continue with Google",
+    "account.signInHint.guest": "Sign in to keep your guest progress and join the leaderboard.",
+    "account.signInHint.none": "Sign in to create an account and join the leaderboard.",
+    "account.signInStartFailed": "Couldn't start sign-in right now. Please try again.",
+    "account.auth.ok": "Signed in successfully.",
+    "account.auth.cancelled": "Sign-in cancelled. Nothing was changed.",
+    "account.auth.conflict":
+      "That sign-in belongs to another account. Your guest progress is still here — try a different account or provider.",
+    "account.auth.expired": "That sign-in attempt expired. Please try again.",
+    "account.auth.restart": "Sign-in didn't complete. Please try again.",
+    "account.auth.failed": "Sign-in failed. Please try again.",
+    "account.career.title": "Career",
+    "account.career.matchesPlayed": "Matches played",
+    "account.career.totalRealizedProfit": "Cumulative realized profit",
+    "account.career.totalFinalWealth": "Total final wealth",
+    "account.career.totalBonusReward": "Total overbid bonus",
+    "account.career.unavailable": "Career stats can't load right now. Try refreshing later.",
+    "account.career.guestHint": "Sign in to keep your progress across devices and appear on the leaderboard.",
+    "account.leaderboardLink": "View leaderboard",
+    "leaderboard.title": "Leaderboard",
+    "leaderboard.backHome": "Back to home",
+    "leaderboard.accountLink": "My account",
+    "leaderboard.col.rank": "Rank",
+    "leaderboard.col.player": "Player",
+    "leaderboard.col.rating": "Appraiser rating",
+    "leaderboard.col.matches": "Matches",
+    "leaderboard.col.profit": "Cum. profit",
+    "leaderboard.col.tier": "Tycoon tier",
+    "leaderboard.self": "you",
+    "leaderboard.prev": "Previous",
+    "leaderboard.next": "Next",
+    "leaderboard.pageStatus": "Ranks {from}–{to} of {total}",
+    "leaderboard.unavailable": "The leaderboard isn't available right now. Try refreshing later.",
+    "leaderboard.empty": "No ranked players yet.",
+    "leaderboard.refresh": "Refresh",
+    "leaderboard.guestHint": "Guests don't appear on the leaderboard. Sign in to get ranked.",
+  },
+};
+
+/** Merge order: server bundle first, local account strings win on overlap. */
+export function withAccountStrings(server: Strings, locale: Locale): Strings {
+  return { ...server, ...ACCOUNT_STRINGS[locale] };
+}
