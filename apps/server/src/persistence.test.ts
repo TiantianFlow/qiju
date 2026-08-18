@@ -7,6 +7,7 @@ import {
   type PersistedMatchInput,
 } from "./persistence.js";
 import type { MatchResult } from "@qiju/game-core";
+import { POCKET_OPENING_BALANCE } from "@qiju/ranking";
 
 /**
  * THE-37b unit tests — no Supabase, no network. The real store's SQL is
@@ -29,6 +30,19 @@ const RESULT: MatchResult = {
     { seatId: "seat4", utilityNumerator: 4000, utilityDenominator: 40000 },
   ],
 };
+
+describe("ZERO_CAREER", () => {
+  it("is an opening pocket, not a zeroed ledger", () => {
+    expect(ZERO_CAREER).toEqual({
+      matchesPlayed: 0,
+      pocketBalance: POCKET_OPENING_BALANCE,
+      wins: 0,
+      losses: 0,
+      pushes: 0,
+      bestDenseEconomicRank: null,
+    });
+  });
+});
 
 describe("buildPersistedMatch", () => {
   it("carries the raw settlement fields per seat, human seat attributed, agents null", () => {

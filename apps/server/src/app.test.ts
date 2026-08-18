@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
 import { sessionDeps } from "./session.js";
+import { ZERO_CAREER } from "./persistence.js";
 import type { FastifyInstance } from "fastify";
 
 /**
@@ -19,14 +20,7 @@ const unitStore = {
   insertMatch: async (input: unknown) => {
     unitWrites.push(input);
   },
-  careerForUser: async () => ({
-    matchesPlayed: 0,
-    totalFinalWealth: 0,
-    totalRealizedProfit: 0,
-    totalBonusReward: 0,
-    bestDenseEconomicRank: null,
-    averageFinalWealth: 0,
-  }),
+  careerForUser: async () => ({ ...ZERO_CAREER }),
   leaderboardPage: async () => ({ rows: [], total: 0 }),
   snapshotExists: async () => false,
 };
@@ -166,9 +160,17 @@ describe("server unit", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as Record<string, unknown>;
-    expect(body).toHaveProperty("matchesPlayed");
-    expect(body).toHaveProperty("totalFinalWealth");
-    expect(body).toHaveProperty("bestDenseEconomicRank");
+    expect(body).toEqual({
+      matchesPlayed: 0,
+      pocketBalance: ZERO_CAREER.pocketBalance,
+      wins: 0,
+      losses: 0,
+      pushes: 0,
+      bestDenseEconomicRank: null,
+    });
+    expect(body).not.toHaveProperty("totalFinalWealth");
+    expect(body).not.toHaveProperty("appraiserRating");
+    expect(body).not.toHaveProperty("tycoonTier");
   });
 
   it("GET /api/v1/me/career returns 503 (not a crash) when the store fails", async () => {
@@ -302,21 +304,16 @@ describe("server unit", () => {
     const realFlow = oauthDeps.flowClientFactory;
     persistenceDeps.storeFactory = () => ({
       insertMatch: async () => {},
-      careerForUser: async () => ({
-        matchesPlayed: 0,
-        totalFinalWealth: 0,
-        totalRealizedProfit: 0,
-        totalBonusReward: 0,
-        bestDenseEconomicRank: null,
-        averageFinalWealth: 0,
-      }),
+      careerForUser: async () => ({ ...ZERO_CAREER }),
       leaderboardPage: async (offset: number, limit: number) => ({
         rows: [
           {
             userId: "aaaaaaaa-0000-0000-0000-000000000001",
-            matchesPlayed: 21,
-            cumulativeRealizedProfit: 21_000,
-            appraiserRating: 1152,
+            matchesPlayed: 2,
+            wins: 1,
+            losses: 0,
+            pushes: 1,
+            pocketBalance: 2_074_150,
             rank: offset + 1,
             total: 1,
           },
@@ -398,18 +395,35 @@ describe("server unit", () => {
       expect((me.json() as { principal: string }).principal).toBe("none");
       expect(me.headers["set-cookie"]).toBeUndefined();
 
-      // leaderboard: public, entries carry label/tier and never a raw UUID.
+      // leaderboard: public, entries carry label + pocket and never a raw UUID.
       const board = await flagged.inject({ method: "GET", url: "/api/v1/leaderboard" });
       expect(board.statusCode).toBe(200);
       const boardBody = board.json() as {
-        entries: Array<{ playerLabel: string; tycoonTier: string; rank: number }>;
+        entries: Array<{
+          playerLabel: string;
+          rank: number;
+          pocketBalance: number;
+          wins: number;
+          losses: number;
+          pushes: number;
+          matchesPlayed: number;
+          isSelf: boolean;
+        }>;
         total: number;
         nextOffset: number | null;
       };
       expect(boardBody.entries).toHaveLength(1);
       expect(boardBody.entries[0]!.playerLabel).toMatch(/^Player-[0-9A-F]{6}$/);
       expect(boardBody.entries[0]!.playerLabel).not.toContain("aaaaaaaa");
-      expect(boardBody.entries[0]!.tycoonTier).toBe("Novice Bidder");
+      expect(boardBody.entries[0]!.pocketBalance).toBe(2_074_150);
+      expect(boardBody.entries[0]!.wins).toBe(1);
+      expect(boardBody.entries[0]!.losses).toBe(0);
+      expect(boardBody.entries[0]!.pushes).toBe(1);
+      expect(boardBody.entries[0]!.matchesPlayed).toBe(2);
+      expect(boardBody.entries[0]!.isSelf).toBe(false);
+      expect(boardBody.entries[0]!).not.toHaveProperty("tycoonTier");
+      expect(boardBody.entries[0]!).not.toHaveProperty("appraiserRating");
+      expect(boardBody.entries[0]!).not.toHaveProperty("cumulativeRealizedProfit");
       expect(boardBody.total).toBe(1);
       expect(boardBody.nextOffset).toBeNull();
 

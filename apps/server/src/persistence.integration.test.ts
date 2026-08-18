@@ -4,7 +4,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import WebSocket from "ws";
 import { buildApp } from "./app.js";
 import { decodeSessionCookie } from "./session.js";
-import { persistenceDeps } from "./persistence.js";
+import { persistenceDeps, ZERO_CAREER } from "./persistence.js";
 import { appEnv, cookiePair, cookieValueDecoded, requireSupabaseEnv } from "./test-helpers.js";
 
 const env = requireSupabaseEnv();
@@ -262,7 +262,7 @@ describe("THE-37b match persistence and career", () => {
 
     const careerBefore = await app.inject({ method: "GET", url: "/api/v1/me/career", headers: { cookie } });
     expect(careerBefore.statusCode).toBe(200);
-    const before = careerBefore.json() as { matchesPlayed: number; totalFinalWealth: number };
+    const before = careerBefore.json() as { matchesPlayed: number; pocketBalance: number };
 
     // Replay: creation deletes and recreates the room with the SAME matchId.
     const replay = await app.inject({
@@ -282,7 +282,7 @@ describe("THE-37b match persistence and career", () => {
     const careerAfter = await app.inject({ method: "GET", url: "/api/v1/me/career", headers: { cookie } });
     expect(careerAfter.json()).toEqual(before);
     expect(before.matchesPlayed).toBeGreaterThanOrEqual(1);
-    expect(before.totalFinalWealth).not.toBe(0);
+    expect(Number.isFinite(before.pocketBalance)).toBe(true);
   }, 420_000);
 
   it("B3: a store failure at the completion boundary does not block the match_completed push or fail the match", async () => {
@@ -390,14 +390,7 @@ describe("THE-37b match persistence and career", () => {
     const cookie = cookiePair(created.headers["set-cookie"], "lv_session")!;
     const career = await app.inject({ method: "GET", url: "/api/v1/me/career", headers: { cookie } });
     expect(career.statusCode).toBe(200);
-    expect(career.json()).toEqual({
-      matchesPlayed: 0,
-      totalFinalWealth: 0,
-      totalRealizedProfit: 0,
-      totalBonusReward: 0,
-      bestDenseEconomicRank: null,
-      averageFinalWealth: 0,
-    });
+    expect(career.json()).toEqual(ZERO_CAREER);
     // The career call itself sets no cookie (no mint, no rotation here).
     expect(career.headers["set-cookie"]).toBeUndefined();
 
