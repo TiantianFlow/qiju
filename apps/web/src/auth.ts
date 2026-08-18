@@ -27,10 +27,11 @@ export interface LeaderboardEntry {
   rank: number;
   playerLabel: string;
   isSelf: boolean;
-  appraiserRating: number;
+  pocketBalance: number;
+  wins: number;
+  losses: number;
+  pushes: number;
   matchesPlayed: number;
-  cumulativeRealizedProfit: number;
-  tycoonTier: string;
 }
 
 export interface LeaderboardPage {

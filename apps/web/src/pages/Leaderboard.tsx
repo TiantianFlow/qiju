@@ -7,8 +7,8 @@ import { fetchLeaderboard, type LeaderboardPage as Page } from "../auth";
 const PAGE_SIZE = 50;
 
 /**
- * THE-58 leaderboard page: offset pagination, isSelf highlighting, Tycoon
- * tier column. Server rounds nothing for display — full-precision values
+ * THE-60 leaderboard page: offset pagination, isSelf highlighting, pocket
+ * balance column. Server rounds nothing for display — full-precision values
  * are formatted here. Flag-off (404) renders a quiet unavailable state,
  * never console noise or a broken table.
  */
@@ -67,10 +67,10 @@ export function LeaderboardPage({
                   <tr>
                     <th scope="col">{t(strings, "leaderboard.col.rank")}</th>
                     <th scope="col">{t(strings, "leaderboard.col.player")}</th>
-                    <th scope="col">{t(strings, "leaderboard.col.rating")}</th>
+                    <th scope="col">{t(strings, "leaderboard.col.pocketBalance")}</th>
+                    <th scope="col">{t(strings, "leaderboard.col.wins")}</th>
+                    <th scope="col">{t(strings, "leaderboard.col.losses")}</th>
                     <th scope="col">{t(strings, "leaderboard.col.matches")}</th>
-                    <th scope="col">{t(strings, "leaderboard.col.profit")}</th>
-                    <th scope="col">{t(strings, "leaderboard.col.tier")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -89,14 +89,16 @@ export function LeaderboardPage({
                           </span>
                         ) : null}
                       </td>
-                      <td className="col-num">
-                        {formatNumber(Math.round(entry.appraiserRating), locale)}
+                      <td className="col-num" data-testid={`leaderboard-pocket-${entry.rank}`}>
+                        {formatNumber(entry.pocketBalance, locale)}
+                      </td>
+                      <td className="col-num" data-testid={`leaderboard-wins-${entry.rank}`}>
+                        {formatNumber(entry.wins, locale)}
+                      </td>
+                      <td className="col-num" data-testid={`leaderboard-losses-${entry.rank}`}>
+                        {formatNumber(entry.losses, locale)}
                       </td>
                       <td className="col-num">{formatNumber(entry.matchesPlayed, locale)}</td>
-                      <td className="col-num">
-                        {formatNumber(Math.round(entry.cumulativeRealizedProfit), locale)}
-                      </td>
-                      <td>{entry.tycoonTier}</td>
                     </tr>
                   ))}
                 </tbody>

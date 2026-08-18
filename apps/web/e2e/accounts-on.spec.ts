@@ -66,7 +66,7 @@ const LOCALES = [
     boardHeading: "排行榜",
     guestStatus: "当前是游客身份",
     signIn: "使用 Google 继续",
-    headers: { rank: "名次", player: "玩家", rating: "估值师评分", matches: "场次", profit: "累计利润", tier: "大亨段位" },
+    headers: { rank: "名次", player: "玩家", pocket: "口袋余额", wins: "胜", losses: "负", matches: "场次" },
   },
   {
     code: "en",
@@ -74,7 +74,7 @@ const LOCALES = [
     boardHeading: "Leaderboard",
     guestStatus: "Playing as a guest",
     signIn: "Continue with Google",
-    headers: { rank: "Rank", player: "Player", rating: "Appraiser rating", matches: "Matches", profit: "Cum. profit", tier: "Tycoon tier" },
+    headers: { rank: "Rank", player: "Player", pocket: "Pocket", wins: "Wins", losses: "Losses", matches: "Matches" },
   },
 ] as const;
 
@@ -379,9 +379,14 @@ test.describe("accounts + leaderboard (FEATURE_ACCOUNTS on)", () => {
     await expect(page.getByTestId("account-principal")).toContainText("游客");
     await expect(page.getByTestId("account-player-label")).toContainText(me!.playerLabel!);
     await expect(page.getByTestId("sign-in-google")).toBeVisible();
-    // Career section exists for a guest (the cookie is a real principal);
-    // zero matches so far is fine — the panel must render, not error.
+    // Career section exists for a guest (the cookie is a real principal).
+    // Zero matches is a real opening pocket of 2,000,000, not an empty state.
     await expect(page.getByTestId("account-career")).toBeVisible();
+    await expect(page.getByTestId("career-pocket")).toContainText("2,000,000", { timeout: 15_000 });
+    await expect(page.getByTestId("career-wins")).toContainText("0");
+    await expect(page.getByTestId("career-losses")).toContainText("0");
+    await expect(page.getByTestId("career-pushes")).toContainText("0");
+    await expect(page.getByTestId("career-matches")).toContainText("0");
     expect(await bodyText(page)).not.toMatch(UUID_RE);
     expect(errors).toEqual([]);
   });
@@ -391,8 +396,8 @@ test.describe("accounts + leaderboard (FEATURE_ACCOUNTS on)", () => {
   }) => {
     const errors = watchConsole(page);
     const fixture = await createPermanentAccount("self");
-    // This account owns one real persisted match row, played WELL (positive
-    // utility) so it is unambiguously the top-rated row on the board.
+    // This account owns one real persisted match row with a positive profit
+    // so the pocket is 2,000,000 + 5,000 and the record is 1-0-0.
     const admin = adminClient();
     const { data: userData } = await admin.auth.getUser(fixture.accessToken);
     const userId = userData.user!.id;
@@ -424,8 +429,12 @@ test.describe("accounts + leaderboard (FEATURE_ACCOUNTS on)", () => {
     await expect(page.getByTestId("account-player-label")).toContainText(me!.playerLabel!);
     // A permanent account does not need another sign-in button.
     await expect(page.getByTestId("sign-in-google")).toHaveCount(0);
-    // Career shows the persisted match.
+    // Career shows the persisted match as pocket + win/loss/push, not wealth.
     await expect(page.getByTestId("career-matches")).toContainText("1", { timeout: 15_000 });
+    await expect(page.getByTestId("career-pocket")).toContainText("2,005,000");
+    await expect(page.getByTestId("career-wins")).toContainText("1");
+    await expect(page.getByTestId("career-losses")).toContainText("0");
+    await expect(page.getByTestId("career-pushes")).toContainText("0");
     expect(await bodyText(page)).not.toMatch(UUID_RE);
 
     // Leaderboard: the account row renders with isSelf; the guest fixture
@@ -439,8 +448,8 @@ test.describe("accounts + leaderboard (FEATURE_ACCOUNTS on)", () => {
     const selfRow = page.locator("tr.is-self");
     await expect(selfRow).toHaveCount(1);
     await expect(selfRow).toContainText(me!.playerLabel!);
-    // Tier column renders the server-provided tier string on that row.
-    await expect(selfRow).toContainText(/Novice Bidder|Savvy Appraiser|Master Dealer|Grand Auctioneer/);
+    // Pocket column renders the opening balance plus this match's profit.
+    await expect(selfRow).toContainText("2,005,000");
     // The guest's UUID must never be on the page (and guests are excluded
     // server-side, so no row exists for them at all).
     expect(boardText).not.toContain(guestId);

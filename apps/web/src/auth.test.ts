@@ -69,10 +69,11 @@ describe("fetchLeaderboard", () => {
     rank: 1,
     playerLabel: "Player-123ABC",
     isSelf: false,
-    appraiserRating: 1152,
+    pocketBalance: 2021000,
+    wins: 12,
+    losses: 8,
+    pushes: 1,
     matchesPlayed: 21,
-    cumulativeRealizedProfit: 21000,
-    tycoonTier: "Novice Bidder",
   };
 
   it("requests the given page and returns entries/total/nextOffset", async () => {

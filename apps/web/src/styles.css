@@ -382,8 +382,8 @@ input, select {
 
 @media (max-width: 480px) {
   /*
-   * THE-58 geometry: at 390px the six leaderboard columns (rank, player,
-   * rating, matches, profit, tier — zh-CN headers are the widest) cannot
+   * THE-60 geometry: at 390px the six leaderboard columns (rank, player,
+   * pocket, wins, losses, matches — zh-CN headers are the widest) cannot
    * keep the full table inside the viewport without illegibly tiny text;
    * the table keeps a sane min-width and scrolls horizontally inside its
    * own bordered region instead of breaking the page layout or clipping

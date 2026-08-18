@@ -7,11 +7,11 @@ import { startOAuthSignIn, type AuthOutcome, type MeResponse } from "../auth";
 
 interface Career {
   matchesPlayed: number;
-  totalFinalWealth: number;
-  totalRealizedProfit: number;
-  totalBonusReward: number;
+  pocketBalance: number;
+  wins: number;
+  losses: number;
+  pushes: number;
   bestDenseEconomicRank: number | null;
-  averageFinalWealth: number;
 }
 
 /**
@@ -141,14 +141,16 @@ export function AccountPage({
             </p>
           ) : career ? (
             <dl className="career-grid" data-testid="career-stats">
+              <dt>{t(strings, "account.career.pocketBalance")}</dt>
+              <dd data-testid="career-pocket">{formatNumber(career.pocketBalance, locale)}</dd>
+              <dt>{t(strings, "account.career.wins")}</dt>
+              <dd data-testid="career-wins">{formatNumber(career.wins, locale)}</dd>
+              <dt>{t(strings, "account.career.losses")}</dt>
+              <dd data-testid="career-losses">{formatNumber(career.losses, locale)}</dd>
+              <dt>{t(strings, "account.career.pushes")}</dt>
+              <dd data-testid="career-pushes">{formatNumber(career.pushes, locale)}</dd>
               <dt>{t(strings, "account.career.matchesPlayed")}</dt>
               <dd data-testid="career-matches">{formatNumber(career.matchesPlayed, locale)}</dd>
-              <dt>{t(strings, "account.career.totalRealizedProfit")}</dt>
-              <dd data-testid="career-profit">{formatNumber(career.totalRealizedProfit, locale)}</dd>
-              <dt>{t(strings, "account.career.totalFinalWealth")}</dt>
-              <dd>{formatNumber(career.totalFinalWealth, locale)}</dd>
-              <dt>{t(strings, "account.career.totalBonusReward")}</dt>
-              <dd>{formatNumber(career.totalBonusReward, locale)}</dd>
             </dl>
           ) : (
             <p className="muted">{t(strings, "common.loading")}</p>
