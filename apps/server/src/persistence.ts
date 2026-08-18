@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { MatchResult } from "@qiju/game-core";
+import { POCKET_OPENING_BALANCE } from "@qiju/ranking";
 
 /**
  * THE-37b — durable match persistence and career statistics.
@@ -51,21 +52,21 @@ export interface PersistedMatchInput {
 
 export interface CareerAggregates {
   matchesPlayed: number;
-  totalFinalWealth: number;
-  totalRealizedProfit: number;
-  totalBonusReward: number;
+  pocketBalance: number;
+  wins: number;
+  losses: number;
+  pushes: number;
   bestDenseEconomicRank: number | null;
-  /** average finalWealth across the caller's human seats. */
-  averageFinalWealth: number;
 }
 
+/** A player with no matches has a real opening pocket, not a zero. */
 export const ZERO_CAREER: CareerAggregates = {
   matchesPlayed: 0,
-  totalFinalWealth: 0,
-  totalRealizedProfit: 0,
-  totalBonusReward: 0,
+  pocketBalance: POCKET_OPENING_BALANCE,
+  wins: 0,
+  losses: 0,
+  pushes: 0,
   bestDenseEconomicRank: null,
-  averageFinalWealth: 0,
 };
 
 /**
@@ -76,8 +77,10 @@ export const ZERO_CAREER: CareerAggregates = {
 export interface LeaderboardRow {
   userId: string;
   matchesPlayed: number;
-  cumulativeRealizedProfit: number;
-  appraiserRating: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  pocketBalance: number;
   rank: number;
   total: number;
 }
@@ -85,9 +88,9 @@ export interface LeaderboardRow {
 export interface MatchPersistenceStore {
   /** Insert the match + seat rows idempotently; throw on failure — callers must swallow. */
   insertMatch(input: PersistedMatchInput): Promise<void>;
-  /** Aggregate the caller's own human-seat rows; zeroed aggregates when none. */
+  /** Aggregate the caller's own human-seat rows; opening pocket when none. */
   careerForUser(userId: string): Promise<CareerAggregates>;
-  /** THE-39: one page of the leaderboard via the service-role-only RPC. */
+  /** THE-60: one page of the pocket leaderboard via the service-role-only v2 RPC. */
   leaderboardPage(offset: number, limit: number): Promise<{ rows: LeaderboardRow[]; total: number }>;
   /** THE-39: does the conversion snapshot exist for this user? (fail-closed contract) */
   snapshotExists(userId: string): Promise<boolean>;
@@ -146,34 +149,48 @@ export function createSupabaseStore(client: SupabaseClient): MatchPersistenceSto
     async careerForUser(userId) {
       const { data, error } = await client
         .from("match_seats")
-        .select("match_id, final_wealth, realized_profit, bonus_reward, dense_economic_rank")
+        .select("match_id, realized_profit, dense_economic_rank")
         .eq("user_id", userId);
       if (error) throw new Error(`career query failed: ${error.message}`);
       const rows = (data ?? []) as Array<{
         match_id: string;
-        final_wealth: number | string;
         realized_profit: number | string;
-        bonus_reward: number | string;
         dense_economic_rank: number;
       }>;
       if (rows.length === 0) return { ...ZERO_CAREER };
       // matchesPlayed counts DISTINCT matches: a user could in principle
       // hold several seats; one match is one played game.
+      //
+      // LATENT ASSUMPTION (recorded, deliberately not restructured):
+      // wins/losses/pushes count human seat ROWS. Today's modes have
+      // exactly one human seat per match, so row counts and match counts
+      // coincide. A future multi-human mode must revisit this — the same
+      // assumption is pinned in leaderboard_page_v2 and test M14.
       const matches = new Set(rows.map((r) => r.match_id));
       const num = (v: number | string): number => (typeof v === "string" ? Number(v) : v);
-      const totalFinalWealth = rows.reduce((a, r) => a + num(r.final_wealth), 0);
+      let wins = 0;
+      let losses = 0;
+      let pushes = 0;
+      let realizedSum = 0;
+      for (const r of rows) {
+        const profit = num(r.realized_profit);
+        realizedSum += profit;
+        if (profit > 0) wins += 1;
+        else if (profit < 0) losses += 1;
+        else pushes += 1;
+      }
       return {
         matchesPlayed: matches.size,
-        totalFinalWealth,
-        totalRealizedProfit: rows.reduce((a, r) => a + num(r.realized_profit), 0),
-        totalBonusReward: rows.reduce((a, r) => a + num(r.bonus_reward), 0),
+        pocketBalance: POCKET_OPENING_BALANCE + realizedSum,
+        wins,
+        losses,
+        pushes,
         bestDenseEconomicRank: Math.min(...rows.map((r) => r.dense_economic_rank)),
-        averageFinalWealth: totalFinalWealth / rows.length,
       };
     },
 
     async leaderboardPage(offset, limit) {
-      const { data, error } = await client.rpc("leaderboard_page_v1", {
+      const { data, error } = await client.rpc("leaderboard_page_v2", {
         p_offset: offset,
         p_limit: limit,
       });
@@ -182,8 +199,10 @@ export function createSupabaseStore(client: SupabaseClient): MatchPersistenceSto
       const rows = (data ?? []) as Array<{
         user_id: string;
         matches_played: number | string;
-        cumulative_realized_profit: number | string;
-        appraiser_rating: number;
+        wins: number | string;
+        losses: number | string;
+        pushes: number | string;
+        pocket_balance: number | string;
         rank: number | string;
         total: number | string;
       }>;
@@ -191,8 +210,10 @@ export function createSupabaseStore(client: SupabaseClient): MatchPersistenceSto
         rows: rows.map((r) => ({
           userId: r.user_id,
           matchesPlayed: num(r.matches_played),
-          cumulativeRealizedProfit: num(r.cumulative_realized_profit),
-          appraiserRating: r.appraiser_rating,
+          wins: num(r.wins),
+          losses: num(r.losses),
+          pushes: num(r.pushes),
+          pocketBalance: num(r.pocket_balance),
           rank: num(r.rank),
           total: num(r.total),
         })),

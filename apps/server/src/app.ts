@@ -61,7 +61,6 @@ import {
   type AccountsEnv,
   type OAuthTransaction,
 } from "./oauth.js";
-import { tycoonTier } from "@qiju/ranking";
 import type { MatchResult } from "@qiju/game-core";
 
 const envSchema = z.object({
@@ -1117,8 +1116,8 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
 
     /**
      * GET /api/v1/leaderboard — public, never mints, resolves an existing
-     * principal only to mark isSelf. Sort and exclusion live in the RPC;
-     * tier comes from packages/ranking (never duplicated thresholds).
+     * principal only to mark isSelf. Sort and exclusion live in the RPC.
+     * Pocket balance / win-loss-push come from leaderboard_page_v2.
      */
     app.get("/api/v1/leaderboard", async (request, reply) => {
       const query = request.query as Record<string, string | undefined>;
@@ -1142,10 +1141,11 @@ export async function buildApp(envOverrides?: Record<string, string | number | b
           rank: row.rank,
           playerLabel: playerLabel(row.userId, labelSecret),
           isSelf: principal.principalId !== null && row.userId === principal.principalId,
-          appraiserRating: row.appraiserRating,
+          pocketBalance: row.pocketBalance,
+          wins: row.wins,
+          losses: row.losses,
+          pushes: row.pushes,
           matchesPlayed: row.matchesPlayed,
-          cumulativeRealizedProfit: row.cumulativeRealizedProfit,
-          tycoonTier: tycoonTier(row.cumulativeRealizedProfit),
         }));
         const nextOffset =
           parsedOffset + parsedLimit < page.total ? parsedOffset + parsedLimit : null;

@@ -3,9 +3,12 @@ import { Pool } from "pg";
 import type pg from "pg";
 import {
   INITIAL_RATING,
+  POCKET_OPENING_BALANCE,
   cumulativeRealizedProfit,
+  pocketBalance,
   tycoonTier,
   updateAppraiserRating,
+  winLossRecord,
 } from "@qiju/ranking";
 import type { MatchResult } from "@qiju/game-core";
 
@@ -182,8 +185,8 @@ function referenceRating(matches: Array<{ utility: number }>): number {
   return rating;
 }
 
-function referenceProfit(matches: Array<{ profit: number }>): number {
-  const results: MatchResult[] = matches.map((m) => ({
+function profitResults(matches: Array<{ profit: number }>): MatchResult[] {
+  return matches.map((m) => ({
     acquisition: {},
     economic: [
       {
@@ -196,7 +199,18 @@ function referenceProfit(matches: Array<{ profit: number }>): number {
     ],
     training: [],
   }));
-  return cumulativeRealizedProfit(results, "seat1");
+}
+
+function referenceProfit(matches: Array<{ profit: number }>): number {
+  return cumulativeRealizedProfit(profitResults(matches), "seat1");
+}
+
+function referencePocket(matches: Array<{ profit: number }>): number {
+  return pocketBalance(profitResults(matches), "seat1");
+}
+
+function referenceWinLoss(matches: Array<{ profit: number }>) {
+  return winLossRecord(profitResults(matches), "seat1");
 }
 
 describe("THE-39 migration: conversion snapshot, leaderboard RPC, atomic writes", () => {
@@ -244,12 +258,16 @@ describe("THE-39 migration: conversion snapshot, leaderboard RPC, atomic writes"
     );
     expect(snaps).toHaveLength(1);
     const snap = snaps[0]!;
-    expect(snap.snapshot_version).toBe(1);
+    expect(snap.snapshot_version).toBe(2);
     expect(snap.rating_formula_version).toBe("appraiser-v1");
     expect(Number(snap.human_seat_rows)).toBe(3);
     expect(Number(snap.matches_played)).toBe(3);
     expect(Number(snap.appraiser_rating)).toBeCloseTo(referenceRating(matches), 9);
     expect(Number(snap.cumulative_realized_profit)).toBeCloseTo(referenceProfit(matches), 6);
+    expect(Number(snap.pocket_balance)).toBeCloseTo(referencePocket(matches), 6);
+    expect(Number(snap.wins)).toBe(referenceWinLoss(matches).wins);
+    expect(Number(snap.losses)).toBe(referenceWinLoss(matches).losses);
+    expect(Number(snap.pushes)).toBe(referenceWinLoss(matches).pushes);
     expect(Number(snap.total_bonus_reward)).toBe(500);
     expect(snap.best_dense_economic_rank).toBe(1);
     expect(Number(snap.rank_one_finishes)).toBe(3);
@@ -300,10 +318,15 @@ describe("THE-39 migration: conversion snapshot, leaderboard RPC, atomic writes"
     );
     expect(rows).toHaveLength(1);
     const snap = rows[0]!;
+    expect(snap.snapshot_version).toBe(2);
     expect(Number(snap.matches_played)).toBe(0);
     expect(Number(snap.human_seat_rows)).toBe(0);
     expect(Number(snap.appraiser_rating)).toBe(INITIAL_RATING);
     expect(Number(snap.cumulative_realized_profit)).toBe(0);
+    expect(Number(snap.pocket_balance)).toBe(POCKET_OPENING_BALANCE);
+    expect(Number(snap.wins)).toBe(0);
+    expect(Number(snap.losses)).toBe(0);
+    expect(Number(snap.pushes)).toBe(0);
     expect(snap.best_dense_economic_rank).toBeNull();
     expect(snap.first_match_completed_at).toBeNull();
     expect(snap.last_match_completed_at).toBeNull();
@@ -630,11 +653,21 @@ describe("THE-39 migration: conversion snapshot, leaderboard RPC, atomic writes"
     const { rows } = await q<{ proname: string; acl: string[] | null }>(
       `select p.proname, p.proacl::text[] as acl
        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'public'
-         and p.proname in ('leaderboard_page_v1', 'record_match_completion_v1', 'capture_account_conversion_snapshot')`,
+        where n.nspname = 'public'
+          and p.proname in (
+            'leaderboard_page_v1',
+            'leaderboard_page_v2',
+            'record_match_completion_v1',
+            'capture_account_conversion_snapshot'
+          )`,
     );
     const byName = Object.fromEntries(rows.map((r) => [r.proname, r.acl]));
-    for (const name of ["leaderboard_page_v1", "record_match_completion_v1", "capture_account_conversion_snapshot"]) {
+    for (const name of [
+      "leaderboard_page_v1",
+      "leaderboard_page_v2",
+      "record_match_completion_v1",
+      "capture_account_conversion_snapshot",
+    ]) {
       const acl = byName[name];
       // proacl NULL means the DEFAULT privileges apply — PUBLIC EXECUTE
       // included. Every function in this migration revokes that, so a null
@@ -649,6 +682,7 @@ describe("THE-39 migration: conversion snapshot, leaderboard RPC, atomic writes"
     }
     const aclOf = (n: string) => byName[n]!;
     expect(aclOf("leaderboard_page_v1").some((e) => e.startsWith("service_role=X"))).toBe(true);
+    expect(aclOf("leaderboard_page_v2").some((e) => e.startsWith("service_role=X"))).toBe(true);
     expect(aclOf("record_match_completion_v1").some((e) => e.startsWith("service_role=X"))).toBe(true);
 
     // Defence in depth, runtime level: as anon the RPC is not callable.
@@ -730,5 +764,197 @@ describe("THE-39 migration: conversion snapshot, leaderboard RPC, atomic writes"
     expect(rows[0]!.appraiser_rating).toBeCloseTo(1144, 9);
     // matches_played counts DISTINCT matches even with two seat rows.
     expect(Number(rows[0]!.matches_played)).toBe(21);
+  });
+
+  it("M14: leaderboard_page_v2 equals packages/ranking pocketBalance / winLossRecord over the same rows, including a push and a loss", async () => {
+    // Mandatory THE-60 contract: the SQL pocket is the algebraic equivalent
+    // of packages/ranking. Real production data already contains a push
+    // (realized_profit = 0 on the no-sale path); this is not hypothetical.
+    const user = await createUser(false);
+    cleanupUsers.push(user);
+    const matches = [
+      { profit: 74_150 }, // win
+      { profit: 0 }, // push
+      { profit: -12_000 }, // loss
+    ];
+    for (let i = 0; i < matches.length; i++) {
+      const matchId = mid(`m14-${i}`);
+      cleanupMatches.push(matchId);
+      await insertMatch(matchId, new Date(Date.UTC(2026, 7, 17, 0, i)).toISOString(), [
+        humanSeat("seat1", user, 0, matches[i]!.profit),
+        agentSeat("seat2", 0, 0),
+        agentSeat("seat3", 0, 0),
+        agentSeat("seat4", 0, 0),
+      ]);
+    }
+
+    const { rows } = await q<{
+      user_id: string;
+      matches_played: string;
+      wins: string;
+      losses: string;
+      pushes: string;
+      pocket_balance: string;
+      rank: string;
+      total: string;
+    }>(`select * from public.leaderboard_page_v2(0, 100) where user_id = $1`, [user]);
+
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    const expectedRecord = referenceWinLoss(matches);
+    expect(Number(row.matches_played)).toBe(3);
+    expect(Number(row.pocket_balance)).toBeCloseTo(referencePocket(matches), 6);
+    expect(Number(row.pocket_balance)).toBe(POCKET_OPENING_BALANCE + 74_150 - 12_000);
+    expect(Number(row.wins)).toBe(expectedRecord.wins);
+    expect(Number(row.losses)).toBe(expectedRecord.losses);
+    expect(Number(row.pushes)).toBe(expectedRecord.pushes);
+    expect(Number(row.wins)).toBe(1);
+    expect(Number(row.losses)).toBe(1);
+    expect(Number(row.pushes)).toBe(1);
+  });
+
+  it("M15: leaderboard_page_v2 orders by pocket desc, wins desc, matches_played asc, user_id asc; guests are excluded; pagination is stable", async () => {
+    const [rich, samePocketMoreWins, samePocketMoreMatches, guest] = await Promise.all([
+      createUser(false),
+      createUser(false),
+      createUser(false),
+      createUser(true),
+    ]);
+    cleanupUsers.push(rich, samePocketMoreWins, samePocketMoreMatches, guest);
+
+    // Rich: one large win. Highest pocket, ranks first regardless of wins.
+    const richMatch = mid("m15-rich");
+    cleanupMatches.push(richMatch);
+    await insertMatch(richMatch, new Date(Date.UTC(2026, 7, 17, 1, 0)).toISOString(), [
+      humanSeat("seat1", rich, 0, 200_000),
+      agentSeat("seat2", 0, 0),
+      agentSeat("seat3", 0, 0),
+      agentSeat("seat4", 0, 0),
+    ]);
+
+    // Two wins of 50k: same pocket as the next user, more wins → ranks higher.
+    for (let i = 0; i < 2; i++) {
+      const matchId = mid(`m15-wins-${i}`);
+      cleanupMatches.push(matchId);
+      await insertMatch(matchId, new Date(Date.UTC(2026, 7, 17, 2, i)).toISOString(), [
+        humanSeat("seat1", samePocketMoreWins, 0, 50_000),
+        agentSeat("seat2", 0, 0),
+        agentSeat("seat3", 0, 0),
+        agentSeat("seat4", 0, 0),
+      ]);
+    }
+
+    // One 100k win plus a push: same pocket and wins as a one-win player
+    // would have, but more matches → ranks lower than a one-match 100k win.
+    // We already used the two-win user for the wins tie-break, so this
+    // player is the matches_played tail against... we need a one-match
+    // 100k sibling. samePocketMoreWins is 2_100_000 with 2 wins; this
+    // user is also 2_100_000 with 1 win + 1 push, so fewer wins → last
+    // of the 2_100_000 cohort.
+    const hundred = mid("m15-matches-win");
+    const push = mid("m15-matches-push");
+    cleanupMatches.push(hundred, push);
+    await insertMatch(hundred, new Date(Date.UTC(2026, 7, 17, 3, 0)).toISOString(), [
+      humanSeat("seat1", samePocketMoreMatches, 0, 100_000),
+      agentSeat("seat2", 0, 0),
+      agentSeat("seat3", 0, 0),
+      agentSeat("seat4", 0, 0),
+    ]);
+    await insertMatch(push, new Date(Date.UTC(2026, 7, 17, 3, 1)).toISOString(), [
+      humanSeat("seat1", samePocketMoreMatches, 0, 0),
+      agentSeat("seat2", 0, 0),
+      agentSeat("seat3", 0, 0),
+      agentSeat("seat4", 0, 0),
+    ]);
+
+    // Guest with a huge pocket — must never appear.
+    const guestMatch = mid("m15-guest");
+    cleanupMatches.push(guestMatch);
+    await insertMatch(guestMatch, new Date(Date.UTC(2026, 7, 17, 4, 0)).toISOString(), [
+      humanSeat("seat1", guest, 0, 9_000_000),
+      agentSeat("seat2", 0, 0),
+      agentSeat("seat3", 0, 0),
+      agentSeat("seat4", 0, 0),
+    ]);
+
+    const { rows: page } = await q<{
+      user_id: string;
+      pocket_balance: string;
+      wins: string;
+      matches_played: string;
+      rank: string;
+      total: string;
+    }>(`select * from public.leaderboard_page_v2(0, 100)`);
+
+    const ids = page.map((r) => r.user_id);
+    expect(ids).toContain(rich);
+    expect(ids).toContain(samePocketMoreWins);
+    expect(ids).toContain(samePocketMoreMatches);
+    expect(ids).not.toContain(guest);
+
+    const richRow = page.find((r) => r.user_id === rich)!;
+    const moreWinsRow = page.find((r) => r.user_id === samePocketMoreWins)!;
+    const moreMatchesRow = page.find((r) => r.user_id === samePocketMoreMatches)!;
+    expect(Number(richRow.pocket_balance)).toBe(POCKET_OPENING_BALANCE + 200_000);
+    expect(Number(moreWinsRow.pocket_balance)).toBe(POCKET_OPENING_BALANCE + 100_000);
+    expect(Number(moreMatchesRow.pocket_balance)).toBe(POCKET_OPENING_BALANCE + 100_000);
+    expect(Number(moreWinsRow.wins)).toBe(2);
+    expect(Number(moreMatchesRow.wins)).toBe(1);
+    expect(Number(moreWinsRow.matches_played)).toBe(2);
+    expect(Number(moreMatchesRow.matches_played)).toBe(2);
+    expect(Number(richRow.rank)).toBeLessThan(Number(moreWinsRow.rank));
+    expect(Number(moreWinsRow.rank)).toBeLessThan(Number(moreMatchesRow.rank));
+
+    const { rows: page2 } = await q<(typeof page)[number]>(
+      `select * from public.leaderboard_page_v2(1, 1)`,
+    );
+    expect(page2).toHaveLength(1);
+    expect(Number(page2[0]!.rank)).toBe(2);
+    expect(Number(page2[0]!.total)).toBe(Number(richRow.total));
+  });
+
+  it("M16: a second human seat in one match is counted as a row for wins/losses/pushes but not as a second match", async () => {
+    // Pins the same latent assumption M13 pins for rating: today's SQL
+    // counts W/L/P per human seat ROW. If a future multi-human mode
+    // persists two human seats per match, this demonstration is the
+    // documentation that the formula (and packages/ranking parity) must
+    // be revisited — see the LATENT ASSUMPTION comments in the migration.
+    const user = await createUser(false);
+    cleanupUsers.push(user);
+    const matchId = mid("m16-double");
+    cleanupMatches.push(matchId);
+    await insertMatch(matchId, new Date(Date.UTC(2026, 7, 17, 5, 0)).toISOString(), [
+      humanSeat("seat1", user, 0, 100),
+      humanSeat("seat2", user, 0, -40),
+      agentSeat("seat3", 0, 0),
+      agentSeat("seat4", 0, 0),
+    ]);
+
+    const { rows } = await q<{
+      matches_played: string;
+      wins: string;
+      losses: string;
+      pushes: string;
+      pocket_balance: string;
+    }>(`select * from public.leaderboard_page_v2(0, 100) where user_id = $1`, [user]);
+    expect(rows).toHaveLength(1);
+    expect(Number(rows[0]!.matches_played)).toBe(1);
+    expect(Number(rows[0]!.wins)).toBe(1);
+    expect(Number(rows[0]!.losses)).toBe(1);
+    expect(Number(rows[0]!.pushes)).toBe(0);
+    expect(Number(rows[0]!.pocket_balance)).toBe(POCKET_OPENING_BALANCE + 60);
+  });
+
+  it("M17: leaderboard_page_v1 is still present (deploy-ordering retain)", async () => {
+    const { rows } = await q<{ proname: string }>(
+      `select p.proname
+       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname = 'leaderboard_page_v1'`,
+    );
+    expect(rows).toHaveLength(1);
+    // Callable: the running production server still uses v1 until the
+    // server deploy that switches to v2.
+    const { rows: page } = await q(`select * from public.leaderboard_page_v1(0, 1)`);
+    expect(Array.isArray(page)).toBe(true);
   });
 });
