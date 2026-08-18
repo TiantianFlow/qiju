@@ -24,11 +24,26 @@
 # silently SKIPPED every packages-only change (THE-9 and THE-35 never
 # reached production; players saw literal `hud.analyst`/`hud.budget` keys).
 #
-# UNPROVEN: whether config-as-code `watchPatterns` overrides the dashboard
-# "Watch Paths" setting is not confirmed by Railway's docs. This block is
-# landed as the versioned intent; it must be proven empirically after merge
-# (push a packages-only change, confirm a deployment triggers). If Railway
-# ignores it, the dashboard setting must be widened to match.
+# PROVEN FALSE, THE-60 (2026-08-18): config-as-code `watchPatterns` does NOT
+# override the dashboard "Watch Paths" setting. A GraphQL read of the service
+# instance during the THE-60 rollout returned watchPatterns = ["/apps/server/**"]
+# — the dashboard value — while this file specified the wider list below. The
+# `watchPatterns` key here is therefore versioned intent only and is currently
+# INERT. The dashboard setting must be widened by hand to match this list.
+#
+# Two further findings from the same incident, both load-bearing:
+#
+# 1. A MERGE COMMIT has an empty diff for watch-pattern evaluation, so merging
+#    a branch to master can SKIP the deploy even when the merged range touches
+#    watched paths. Land server changes so the tip commit itself touches a
+#    watched path, or expect to trigger the deploy by hand.
+#
+# 2. This file is attached ONLY on deployments created through the GitHub
+#    integration. CLI-initiated deploys (`railway up`, `railway redeploy
+#    --from-source`) ignore it and fall back to the service's configured
+#    builder, which is RAILPACK with no buildCommand — producing an instant
+#    FAILED or a stuck INITIALIZING with empty logs. Do not diagnose that as a
+#    code problem; it is the config never being read.
 
 watchPatterns = ["/apps/server/**", "/packages/**", "/package.json", "/pnpm-lock.yaml", "/pnpm-workspace.yaml", "/tsconfig.base.json"]
 
