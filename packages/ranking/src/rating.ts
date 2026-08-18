@@ -1,4 +1,5 @@
 import type { MatchResult, SeatId } from "@qiju/game-core";
+import { exactlyOne, requireFinite } from "./validate.js";
 
 /**
  * Appraiser Rating and Tycoon Ladder — pure deterministic ranking over
@@ -43,13 +44,6 @@ export const TYCOON_THRESHOLDS = {
   grandAuctioneer: 20_000_000,
 } as const;
 
-function requireFinite(value: number, what: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`${what} must be a finite number, got ${String(value)}`);
-  }
-  return value;
-}
-
 function requireCompletedCount(completedMatchesBeforeUpdate: number): number {
   requireFinite(completedMatchesBeforeUpdate, "completedMatchesBeforeUpdate");
   if (
@@ -63,29 +57,6 @@ function requireCompletedCount(completedMatchesBeforeUpdate: number): number {
     );
   }
   return completedMatchesBeforeUpdate;
-}
-
-/** Exactly one matching entry is required: zero or two-plus is an error. */
-function exactlyOne<T>(
-  entries: readonly T[],
-  seatId: SeatId,
-  matches: (entry: T) => boolean,
-  list: string,
-): T {
-  const found = entries.filter(matches);
-  if (found.length === 0) {
-    throw new Error(`seat ${seatId} has no ${list} entry in match result`);
-  }
-  if (found.length > 1) {
-    throw new Error(
-      `seat ${seatId} has ${found.length} duplicate ${list} entries in match result`,
-    );
-  }
-  const entry = found[0];
-  if (entry === undefined) {
-    throw new Error(`seat ${seatId} has no ${list} entry in match result`);
-  }
-  return entry;
 }
 
 /**
